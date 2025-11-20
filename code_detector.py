@@ -144,6 +144,25 @@ class CodeVisitor(ast.NodeVisitor):
                                          f"Call to '{node.func.attr}' with non-constant/constructed SQL argument (possible SQL injection).",
                                          node.lineno,
                                          "ERROR")
+
+        # Path traversal risks
+        if any(c in ("open", "os.path.join", "pathlib.Path", "Path") for c in candidates):
+            if node.args:
+                path_arg = node.args[0]
+                if not self._node_is_constant_string(path_arg):
+                    self._record("PATH_TRAVERSAL_RISK",
+                                 f"Potential path traversal in {func_name} with non-constant path argument.",
+                                 node.lineno,
+                                 "WARNING")
+                elif self._node_is_constant_string(path_arg):
+                    # Even for constants, check for obvious traversal
+                    path_str = path_arg.value
+                    if ".." in path_str or path_str.startswith("/") or path_str.startswith("\\"):
+                        self._record("PATH_TRAVERSAL_RISK",
+                                     f"Path argument in {func_name} contains '..' or absolute path.",
+                                     node.lineno,
+                                     "WARNING")
+
         self.generic_visit(node)
 
     # Complexity and control flow
