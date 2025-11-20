@@ -1,0 +1,41 @@
+body { font-family: Arial, sans-serif; background: #f7f7f7; color: #222; }
+.container { max-width: 900px; margin: 24px auto; background: #fff; padding: 20px; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+.file-area { margin-top: 16px; border: 1px solid #ddd; padding: 12px; font-family: monospace; font-size: 13px; background: #fafafa; max-height: 600px; overflow: auto; }
+.line { display: block; padding: 2px 6px; white-space: pre; }
+.line-number { display: inline-block; width: 48px; color: #777; }
+.line-content { display: inline-block; }
+.flag { margin-left: 8px; padding: 2px 6px; border-radius: 4px; background: #c00; color: #fff; font-size: 11px; }
+.flagged { background: rgba(248, 248, 248, 0); }
+.small { font-size: 12px; color: #555; }
+.flash { outline: 2px solid #ffeb3b; box-shadow: 0 0 8px #ffd54f; }
+
+/* Highlight lines when a type filter is active */
+.type-active { background: rgba(255, 0, 0, 0.18) !important; }
+/* JSON output */
+.json-area { margin-top: 12px; }
+.json-output { background: #111; color: #d6d6d6; padding: 12px; border-radius: 6px; overflow: auto; max-height: 360px; }
+.json-output:empty { color: #777; }
+button { margin-left: 8px; padding: 6px 8px; border-radius: 4px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
+button:hover { background: #f0f0f0; }
+
+/* Summary panel */
+.summary { border: 1px solid #e6e6e6; padding: 10px; border-radius: 6px; background: #fbfbfb; margin-bottom: 12px; }
+.summary-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.summary-item { background: #fff; padding: 6px 8px; border-radius: 4px; border: 1px solid #eee; font-size: 13px; }
+.summary-item strong { color: #111; }
+.summary ul { margin: 6px 0 0 14px; padding-left: 12px; color: #333; }
+.summary .small { margin-right: 8px; }
+
+/* spacing for master "All" toggle above type list */
+.all-toggle { margin-bottom: 6px; }
+
+/* Layout */
+.layout { display: grid; grid-template-columns: 1fr 320px; gap: 16px; align-items: start; }
+.side-panel { position: sticky; top: 18px; }
+.main h1 { margin-top: 0; }
+
+/* Left-align main layout container so content starts from left edge */
+.container.layout { max-width: none; width: auto; margin: 24px; }
+
+/* Prism code block styles (in case we use pre/code) */
+.code-block { font-family: monospace; font-size: 13px; }

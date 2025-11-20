@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Malicious Code Detector - UI</title>
+  <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" integrity="sha512-GwH1N0iQzvQ0s1X0h0Q2Qy9x3HkQ6s1m7t9wK3zG6KxkB6qjB6qj2Yxv2zKj3qW5Y6Zs3JZpG1Yv5w==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+</head>
+<body>
+  <div class="container layout">
+    <div class="main">
+      <h1>Malicious Code Detector — Upload File</h1>
+      <form id="uploadForm">
+        <input type="file" id="fileInput" name="file" accept=".py" />
+        <button type="submit">Upload & Scan</button>
+      </form>
+
+      <div id="result">
+        <h2 id="fname"></h2>
+        <div id="fileArea" class="file-area"></div>
+        <div class="json-area">
+          <div style="margin-top:12px; display:flex; justify-content:space-between; align-items:center;">
+            <h3 class="small">Detector JSON Output</h3>
+            <div>
+              <button id="downloadJson">Download JSON</button>
+              <button id="toggleJson">Toggle JSON</button>
+            </div>
+          </div>
+          <pre id="jsonOutput" class="json-output" style="display:block;">{}
+          </pre>
+        </div>
+      </div>
+    </div>
+
+    <aside class="side-panel">
+      <div class="summary" id="summary" style="display:none;">
+        <h3>Summary</h3>
+        <div class="summary-row">
+          <div class="summary-item">Total: <strong id="totalCount">0</strong></div>
+          <div class="summary-item">Errors: <strong id="errorCount">0</strong></div>
+          <div class="summary-item">Warnings: <strong id="warningCount">0</strong></div>
+          <div class="summary-item">Infos: <strong id="infoCount">0</strong></div>
+        </div>
+        <div style="margin-top:8px">
+          <strong class="small">Finding types:</strong>
+          <ul id="typeList" class="small"></ul>
+        </div>
+        <div style="margin-top:12px">
+          <canvas id="severityChart" width="200" height="120"></canvas>
+        </div>
+      </div>
+    </aside>
+  </div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" crossorigin="anonymous"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.3.0/chart.umd.min.js" crossorigin="anonymous"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
