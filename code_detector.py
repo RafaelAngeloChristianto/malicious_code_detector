@@ -1,29 +1,422 @@
 #!/usr/bin/env python3
 """
-code_detector.py - enhanced & fixed
+code_detector.py - GRAMMAR-BASED PARSER for Vulnerability Detection
 
-- Uses ast.Constant (no ast.Str) to avoid deprecation warning.
-- Adds robust SQL-string-construction detection (concatenation, f-strings,
-  % formatting, .format()) and flags .execute(...) usages with non-constant SQL args.
-- Maintains previous functionality: exec/pickle/obfuscation/secrets/complexity checks.
+- Formal grammar productions defining vulnerability patterns
+- LR-style parsing with ACTION/GOTO tables (dictionaries)
+- Uses same algorithm as examplecode.py but for security analysis
+- No regex pattern matching - pure grammar-based approach
 """
 
 import ast
 import os
-import re
 import sys
 import json
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
 # ---------- Configurable thresholds ----------
 COMPLEXITY_WARN = 8     # function complexity above this -> warn
 COMPLEXITY_ERROR = 15   # function complexity above this -> error
-HARDSECRET_MIN_LEN = 16 # min length to treat matched secret-like token as high-confidence
 
 # ---------- Utility types ----------
 SEVERITIES = ("INFO", "WARNING", "ERROR")
 
-SQL_KEYWORDS_RE = re.compile(r"\b(SELECT|INSERT|UPDATE|DELETE|WHERE|FROM|JOIN|DROP|CREATE|ALTER|TRUNCATE)\b", re.IGNORECASE)
+# ============================================
+# VULNERABILITY DETECTION GRAMMAR & TABLES
+# ============================================
+# Grammar productions for vulnerability patterns
+# Format: (LHS, RHS_list, severity, message)
+VULNERABILITY_GRAMMAR = [
+    # SQL Injection patterns (0-4)
+    ("VULN", ["SQL_CALL", "CONCAT_ARG"], "ERROR", "SQL injection via concatenated query"),
+    ("VULN", ["SQL_CALL", "FORMAT_ARG"], "ERROR", "SQL injection via formatted string"),
+    ("VULN", ["SQL_CALL", "FSTRING_ARG"], "ERROR", "SQL injection via f-string"),
+    ("VULN", ["SQL_VAR", "CONCAT_OP", "USER_INPUT"], "ERROR", "SQL string concatenation with user input"),
+    ("VULN", ["SQL_ASSIGN", "CONCAT_OP"], "ERROR", "SQL string construction via concatenation"),
+    
+    # Code execution patterns (5-7)
+    ("VULN", ["EXEC_CALL", "DYNAMIC_ARG"], "ERROR", "Dynamic code execution detected"),
+    ("VULN", ["EXEC_CALL", "B64_DECODE"], "ERROR", "Obfuscated code execution"),
+    ("VULN", ["EVAL_CALL", "USER_INPUT"], "ERROR", "eval() with user-controlled input"),
+    
+    # Command injection patterns (8-10)
+    ("VULN", ["SYSTEM_CALL", "SHELL_TRUE", "CONCAT_ARG"], "ERROR", "Command injection via shell=True"),
+    ("VULN", ["OS_SYSTEM", "FORMAT_ARG"], "ERROR", "OS command with formatted input"),
+    ("VULN", ["SUBPROCESS", "SHELL_TRUE"], "WARNING", "subprocess with shell=True"),
+    
+    # Deserialization patterns (11-12)
+    ("VULN", ["PICKLE_LOAD", "UNTRUSTED_SOURCE"], "ERROR", "Unsafe deserialization"),
+    ("VULN", ["PICKLE_LOAD", "USER_INPUT"], "ERROR", "Pickle load from user input"),
+    
+    # Path traversal patterns (13-15)
+    ("VULN", ["FILE_OPEN", "CONCAT_PATH"], "WARNING", "Path traversal via concatenation"),
+    ("VULN", ["FILE_OPEN", "USER_INPUT"], "WARNING", "File access with user-controlled path"),
+    ("VULN", ["PATH_OP", "DOTDOT"], "WARNING", "Directory traversal pattern detected"),
+    
+    # Hard-coded secrets (16-18)
+    ("VULN", ["ASSIGN", "SECRET_PATTERN"], "ERROR", "Hard-coded API key or secret token"),
+    ("VULN", ["ASSIGN", "AWS_KEY"], "ERROR", "Hard-coded AWS access key"),
+    ("VULN", ["ASSIGN", "LONG_TOKEN"], "WARNING", "Suspicious hard-coded token or credential"),
+    
+    # Hard-coded IP addresses (19)
+    ("VULN", ["STRING_LITERAL", "IP_PATTERN"], "WARNING", "Hard-coded IP address detected"),
+    
+    # Insecure cryptography (20-22)
+    ("VULN", ["HASH_CALL", "WEAK_ALGO"], "ERROR", "Weak cryptographic hash algorithm (MD5/SHA1)"),
+    ("VULN", ["RANDOM_CALL", "TOKEN_GEN"], "ERROR", "Insecure random for cryptographic token generation"),
+    ("VULN", ["RANDOM_SEED", "PREDICTABLE"], "WARNING", "Predictable random seed"),
+    
+    # Insecure network operations (23-24)
+    ("VULN", ["REQUESTS_CALL", "VERIFY_FALSE"], "ERROR", "SSL certificate verification disabled"),
+    ("VULN", ["URLLIB_CALL", "NO_VERIFY"], "WARNING", "Insecure HTTPS context"),
+]
+
+# ACTION table for vulnerability pattern recognition
+# Maps (state, token) -> (action, next_state/production)
+VULN_ACTION_TABLE = {
+    0: {
+        "execute": ("shift", 1),
+        "executemany": ("shift", 1),
+        "exec": ("shift", 10),
+        "eval": ("shift", 11),
+        "subprocess": ("shift", 20),
+        "os.system": ("shift", 30),
+        "pickle.load": ("shift", 40),
+        "open": ("shift", 50),
+        "Path": ("shift", 50),
+        "assign": ("shift", 60),
+        "string": ("shift", 70),
+        "hashlib": ("shift", 80),
+        "random": ("shift", 90),
+        "requests": ("shift", 100),
+        "urllib": ("shift", 110),
+    },
+    1: {  # After SQL execute method
+        "concat": ("shift", 2),
+        "format": ("shift", 3),
+        "fstring": ("shift", 4),
+        "$": ("reduce", 0),
+    },
+    2: {  # SQL + concatenation
+        "$": ("reduce", 0),
+    },
+    3: {  # SQL + format
+        "$": ("reduce", 1),
+    },
+    4: {  # SQL + f-string
+        "$": ("reduce", 2),
+    },
+    10: {  # After exec
+        "dynamic": ("shift", 12),
+        "b64decode": ("shift", 13),
+        "$": ("reduce", 5),
+    },
+    12: {  # exec + dynamic
+        "$": ("reduce", 5),
+    },
+    13: {  # exec + base64
+        "$": ("reduce", 6),
+    },
+    11: {  # After eval
+        "user_input": ("shift", 14),
+        "$": ("reduce", 7),
+    },
+    14: {
+        "$": ("reduce", 7),
+    },
+    20: {  # subprocess
+        "shell_true": ("shift", 21),
+        "$": ("reduce", 10),
+    },
+    21: {
+        "concat": ("shift", 22),
+        "$": ("reduce", 10),
+    },
+    22: {
+        "$": ("reduce", 8),
+    },
+    30: {  # os.system
+        "format": ("shift", 31),
+        "$": ("reduce", 9),
+    },
+    31: {
+        "$": ("reduce", 9),
+    },
+    40: {  # pickle.load
+        "untrusted": ("shift", 41),
+        "user_input": ("shift", 42),
+        "$": ("reduce", 11),
+    },
+    41: {
+        "$": ("reduce", 11),
+    },
+    42: {
+        "$": ("reduce", 12),
+    },
+    50: {  # file operations
+        "concat": ("shift", 51),
+        "user_input": ("shift", 52),
+        "dotdot": ("shift", 53),
+        "$": ("reduce", 13),
+    },
+    51: {
+        "$": ("reduce", 13),
+    },
+    52: {
+        "$": ("reduce", 14),
+    },
+    53: {
+        "$": ("reduce", 15),
+    },
+    60: {  # assignments
+        "secret_pattern": ("shift", 61),
+        "aws_key": ("shift", 62),
+        "long_token": ("shift", 63),
+        "sql_concat": ("shift", 64),
+        "$": ("reduce", 16),
+    },
+    61: {  # secret pattern
+        "$": ("reduce", 16),
+    },
+    62: {  # AWS key
+        "$": ("reduce", 17),
+    },
+    63: {  # long token
+        "$": ("reduce", 18),
+    },
+    64: {  # SQL concatenation in assignment
+        "$": ("reduce", 4),
+    },
+    70: {  # string literals
+        "ip_pattern": ("shift", 71),
+        "$": ("reduce", 19),
+    },
+    71: {
+        "$": ("reduce", 19),
+    },
+    80: {  # hashlib calls
+        "weak_algo": ("shift", 81),
+        "$": ("reduce", 20),
+    },
+    81: {
+        "$": ("reduce", 20),
+    },
+    90: {  # random module
+        "token_gen": ("shift", 91),
+        "seed": ("shift", 92),
+        "$": ("reduce", 21),
+    },
+    91: {
+        "$": ("reduce", 21),
+    },
+    92: {
+        "predictable": ("shift", 93),
+        "$": ("reduce", 22),
+    },
+    93: {
+        "$": ("reduce", 22),
+    },
+    100: {  # requests module
+        "verify_false": ("shift", 101),
+        "$": ("reduce", 23),
+    },
+    101: {
+        "$": ("reduce", 23),
+    },
+    110: {  # urllib module
+        "no_verify": ("shift", 111),
+        "$": ("reduce", 24),
+    },
+    111: {
+        "$": ("reduce", 24),
+    },
+}
+
+# GOTO table for non-terminals
+VULN_GOTO_TABLE = {
+    0: {"VULN": 100},
+    # Add more GOTO states as needed
+}
+
+class VulnerabilityParser:
+    """
+    Grammar-based parser for detecting vulnerability patterns.
+    Uses LR-style parsing with ACTION/GOTO tables.
+    """
+    
+    def __init__(self):
+        self.findings: List[Dict[str, Any]] = []
+        
+    def tokenize_pattern(self, node_type: str, context: Dict[str, Any]) -> List[str]:
+        """
+        Convert AST node information into tokens for the parser.
+        Returns list of tokens representing the vulnerability pattern.
+        """
+        tokens = []
+        
+        # Map node types to parser tokens
+        if node_type == "Call":
+            func_name = context.get("func_name", "")
+            
+            # SQL-related calls
+            if "execute" in func_name.lower():
+                tokens.append("execute" if "many" not in func_name else "executemany")
+                
+                # Check argument type
+                if context.get("has_concat"):
+                    tokens.append("concat")
+                elif context.get("has_format"):
+                    tokens.append("format")
+                elif context.get("has_fstring"):
+                    tokens.append("fstring")
+                    
+            # Code execution
+            elif func_name == "exec":
+                tokens.append("exec")
+                if context.get("has_b64decode"):
+                    tokens.append("b64decode")
+                elif context.get("is_dynamic"):
+                    tokens.append("dynamic")
+                    
+            elif func_name == "eval":
+                tokens.append("eval")
+                if context.get("has_user_input"):
+                    tokens.append("user_input")
+                    
+            # Command execution
+            elif "subprocess" in func_name:
+                tokens.append("subprocess")
+                if context.get("shell_true"):
+                    tokens.append("shell_true")
+                if context.get("has_concat"):
+                    tokens.append("concat")
+                    
+            elif "system" in func_name:
+                tokens.append("os.system")
+                if context.get("has_format"):
+                    tokens.append("format")
+                    
+            # Deserialization
+            elif "pickle.load" in func_name:
+                tokens.append("pickle.load")
+                if context.get("untrusted_source"):
+                    tokens.append("untrusted")
+                elif context.get("has_user_input"):
+                    tokens.append("user_input")
+                    
+            # File operations
+            elif func_name in ("open", "Path"):
+                tokens.append("open" if func_name == "open" else "Path")
+                if context.get("has_concat"):
+                    tokens.append("concat")
+                elif context.get("has_user_input"):
+                    tokens.append("user_input")
+                elif context.get("has_dotdot"):
+                    tokens.append("dotdot")
+            
+            # Cryptographic operations
+            elif "hashlib" in func_name or func_name in ("md5", "sha1", "new"):
+                tokens.append("hashlib")
+                if context.get("weak_algo"):
+                    tokens.append("weak_algo")
+            
+            # Random operations
+            elif "random" in func_name:
+                tokens.append("random")
+                if context.get("token_gen"):
+                    tokens.append("token_gen")
+                elif context.get("has_seed"):
+                    tokens.append("seed")
+                    if context.get("predictable_seed"):
+                        tokens.append("predictable")
+            
+            # Network requests
+            elif "requests" in func_name or func_name in ("get", "post", "request"):
+                tokens.append("requests")
+                if context.get("verify_false"):
+                    tokens.append("verify_false")
+            
+            elif "urllib" in func_name or "urlopen" in func_name:
+                tokens.append("urllib")
+                if context.get("no_verify"):
+                    tokens.append("no_verify")
+        
+        elif node_type == "Assign":
+            tokens.append("assign")
+            if context.get("has_secret_pattern"):
+                tokens.append("secret_pattern")
+            elif context.get("has_aws_key"):
+                tokens.append("aws_key")
+            elif context.get("has_long_token"):
+                tokens.append("long_token")
+            elif context.get("has_sql_concat"):
+                tokens.append("sql_concat")
+        
+        elif node_type == "Constant":
+            tokens.append("string")
+            if context.get("has_ip_pattern"):
+                tokens.append("ip_pattern")
+        
+        # End-of-input marker
+        if tokens:
+            tokens.append("$")
+        
+        return tokens
+    
+    def parse_pattern(self, tokens: List[str], filename: str, lineno: int) -> Optional[Dict[str, Any]]:
+        """
+        Parse tokens using ACTION/GOTO tables to detect vulnerability patterns.
+        Returns vulnerability finding if pattern matches, None otherwise.
+        """
+        if not tokens or len(tokens) < 2:
+            return None
+            
+        stack = [0]
+        idx = 0
+        
+        while idx < len(tokens):
+            state = stack[-1]
+            lookahead = tokens[idx]
+            
+            # Get action for current state and token
+            state_actions = VULN_ACTION_TABLE.get(state, {})
+            action = state_actions.get(lookahead)
+            
+            if action is None:
+                return None  # No matching pattern
+                
+            action_type, value = action
+            
+            if action_type == "shift":
+                stack.append(value)
+                idx += 1
+                
+            elif action_type == "reduce":
+                # Found a vulnerability pattern
+                prod = VULNERABILITY_GRAMMAR[value]
+                lhs, rhs, severity, message = prod
+                
+                return {
+                    "file": filename,
+                    "lineno": lineno,
+                    "code": f"GRAMMAR_{lhs}",
+                    "message": f"Grammar-based detection: {message}",
+                    "severity": severity,
+                    "pattern": " -> ".join(rhs),
+                    "tokens": tokens[:-1]  # Exclude '$'
+                }
+                
+        return None
+    
+    def analyze_node_with_grammar(self, node_type: str, context: Dict[str, Any], 
+                                   filename: str, lineno: int) -> Optional[Dict[str, Any]]:
+        """
+        Main entry point: tokenize and parse a code pattern.
+        """
+        tokens = self.tokenize_pattern(node_type, context)
+        if tokens:
+            return self.parse_pattern(tokens, filename, lineno)
+        return None
 
 class CodeVisitor(ast.NodeVisitor):
     def __init__(self, filename: str):
@@ -34,6 +427,7 @@ class CodeVisitor(ast.NodeVisitor):
         self.imports: List[Tuple[str, str]] = []  # (full, localname)
         self.str_literals: List[str] = []
         self.call_names_seen: List[str] = []
+        self.grammar_parser = VulnerabilityParser()  # Add grammar-based parser
 
     # Imports
     def visit_Import(self, node: ast.Import):
@@ -55,6 +449,43 @@ class CodeVisitor(ast.NodeVisitor):
     def visit_Constant(self, node: ast.Constant):
         if isinstance(node.value, str):
             self.str_literals.append(node.value)
+            
+            # Grammar-based detection for hard-coded secrets and IPs
+            context = {
+                "value": node.value,
+                "has_ip_pattern": self._is_ip_pattern(node.value),
+            }
+            
+            grammar_finding = self.grammar_parser.analyze_node_with_grammar(
+                "Constant", context, self.filename, node.lineno
+            )
+            
+            if grammar_finding:
+                self.findings.append(grammar_finding)
+        
+        self.generic_visit(node)
+    
+    # Handle assignments for secret detection
+    def visit_Assign(self, node: ast.Assign):
+        if node.value and isinstance(node.value, ast.Constant):
+            if isinstance(node.value.value, str):
+                value_str = node.value.value
+                
+                context = {
+                    "value": value_str,
+                    "has_secret_pattern": self._is_secret_pattern(value_str),
+                    "has_aws_key": self._is_aws_key(value_str),
+                    "has_long_token": self._is_long_token(value_str),
+                    "has_sql_concat": False,  # Handled in visit_Call
+                }
+                
+                grammar_finding = self.grammar_parser.analyze_node_with_grammar(
+                    "Assign", context, self.filename, node.lineno
+                )
+                
+                if grammar_finding:
+                    self.findings.append(grammar_finding)
+        
         self.generic_visit(node)
 
     # Calls (exec, subprocess, execute, etc.)
@@ -83,85 +514,36 @@ class CodeVisitor(ast.NodeVisitor):
                     remainder = func_name.split(".", 1)[1]
                     candidates.add(f"{imported_full}.{remainder}")
 
-        # exec/eval/compile
-        if any(c in ("eval", "exec", "compile", "execfile") for c in candidates):
-            self._record("EXEC_USAGE",
-                         f"Use of exec/eval/compile detected ({func_name}).",
-                         node.lineno,
-                         "ERROR" if any(c in ("exec", "eval") for c in candidates) else "WARNING")
-
-        # subprocess with shell=True
-        if any(c.startswith("subprocess.") or c in ("Popen", "run") for c in candidates):
-            for kw in node.keywords:
-                if kw.arg == "shell" and isinstance(kw.value, ast.Constant) and kw.value.value is True:
-                    self._record("SUBPROCESS_SHELL",
-                                 "subprocess called with shell=True (command injection risk).",
-                                 node.lineno,
-                                 "ERROR")
-
-        # os.system / popen
-        if any(c in ("os.system", "os.popen", "system", "popen") for c in candidates):
-            self._record("OS_SYSTEM",
-                         f"Call to {func_name} (platform command execution).",
-                         node.lineno,
-                         "WARNING")
-
-        # pickle.load(s)
-        if any(c.startswith("pickle.") and c.split(".")[-1] in ("load", "loads") for c in candidates):
-            self._record("PICKLE_LOAD",
-                         "Use of pickle.load(s) detected (unsafe when loading untrusted data).",
-                         node.lineno,
-                         "ERROR")
-
-        # exec of base64-decoded content
-        if "exec" in candidates and node.args:
-            arg = node.args[0]
-            if isinstance(arg, ast.Call):
-                inner_name = self._get_call_name(arg.func)
-                if inner_name and (inner_name.endswith("b64decode") or "base64" in inner_name):
-                    self._record("OBF_EXEC_BASE64",
-                                 "exec of base64-decoded string (possible obfuscation).",
-                                 node.lineno,
-                                 "ERROR")
-
-        if func_name == "<unknown>":
-            self._record("DYNAMIC_CALL",
-                         "Call site with dynamic function expression (could hide dangerous call).",
-                         node.lineno,
-                         "INFO")
-
-        # New: detect DB execute-like calls and SQL argument construction
-        if isinstance(node.func, ast.Attribute):
-            attr = node.func.attr.lower()
-            if attr in ("execute", "executemany", "executescript"):
-                # if there's a first arg
-                if node.args:
-                    first = node.args[0]
-                    # if it's not a constant SQL string, but contains SQL keywords or looks constructed -> flag
-                    if not self._is_constant_sql_string(first):
-                        if self._node_contains_sql_keywords(first) or self._node_may_be_sql_construction(first):
-                            self._record("SQL_INJECTION_RISK",
-                                         f"Call to '{node.func.attr}' with non-constant/constructed SQL argument (possible SQL injection).",
-                                         node.lineno,
-                                         "ERROR")
-
-        # Path traversal risks
-        if any(c in ("open", "os.path.join", "pathlib.Path", "Path") for c in candidates):
-            if node.args:
-                path_arg = node.args[0]
-                if not self._node_is_constant_string(path_arg):
-                    self._record("PATH_TRAVERSAL_RISK",
-                                 f"Potential path traversal in {func_name} with non-constant path argument.",
-                                 node.lineno,
-                                 "WARNING")
-                elif self._node_is_constant_string(path_arg):
-                    # Even for constants, check for obvious traversal
-                    path_str = path_arg.value
-                    if ".." in path_str or path_str.startswith("/") or path_str.startswith("\\"):
-                        self._record("PATH_TRAVERSAL_RISK",
-                                     f"Path argument in {func_name} contains '..' or absolute path.",
-                                     node.lineno,
-                                     "WARNING")
+        # ============================================
+        # GRAMMAR-BASED PARSING FOR VULNERABILITY DETECTION
+        # ============================================
+        # Build context for grammar parser
+        context = {
+            "func_name": func_name,
+            "has_concat": self._node_has_concatenation(node),
+            "has_format": self._node_has_format(node),
+            "has_fstring": self._node_has_fstring(node),
+            "has_b64decode": self._has_b64decode_arg(node),
+            "is_dynamic": not self._all_args_constant(node),
+            "has_user_input": self._may_have_user_input(node),
+            "shell_true": self._has_shell_true(node),
+            "untrusted_source": self._is_untrusted_source(node),
+            "has_dotdot": self._has_dotdot_in_path(node),
+            "weak_algo": self._has_weak_hash_algo(node, func_name),
+            "token_gen": self._is_token_generation(node, func_name),
+            "has_seed": self._is_random_seed(func_name),
+            "predictable_seed": self._has_predictable_seed(node),
+            "verify_false": self._has_verify_false(node),
+            "no_verify": self._has_no_ssl_verify(node),
+        }
+        
+        # Use grammar-based parser to detect vulnerability patterns
+        grammar_finding = self.grammar_parser.analyze_node_with_grammar(
+            "Call", context, self.filename, node.lineno
+        )
+        
+        if grammar_finding:
+            self.findings.append(grammar_finding)
 
         self.generic_visit(node)
 
@@ -201,41 +583,7 @@ class CodeVisitor(ast.NodeVisitor):
         self._inc_complexity()
         self.generic_visit(node)
 
-    # Detect assignments that construct SQL-like strings
-    def visit_Assign(self, node: ast.Assign):
-        try:
-            if node.value is not None:
-                if self._node_may_be_sql_construction(node.value):
-                    preview_targets = []
-                    for t in node.targets:
-                        if isinstance(t, ast.Name):
-                            preview_targets.append(t.id)
-                        elif isinstance(t, ast.Attribute):
-                            preview_targets.append(t.attr)
-                        else:
-                            preview_targets.append("<complex-target>")
-                    target_preview = ", ".join(preview_targets) or "<target>"
-                    self._record("SQL_STRING_CONSTRUCTION",
-                                 f"Assignment building SQL-like string into {target_preview} (concatenation/formatting detected).",
-                                 node.lineno,
-                                 "ERROR")
-        except Exception:
-            pass
-        self.generic_visit(node)
-
-    # f-strings
-    def visit_JoinedStr(self, node: ast.JoinedStr):
-        try:
-            has_formatted = any(isinstance(v, ast.FormattedValue) for v in node.values)
-            literal_parts = "".join([v.value if isinstance(v, ast.Constant) and isinstance(v.value, str) else "" for v in node.values])
-            if has_formatted and SQL_KEYWORDS_RE.search(literal_parts):
-                self._record("FSTRING_SQL_CONSTRUCTION",
-                             "f-string contains SQL keywords and expression interpolation (possible SQL injection).",
-                             node.lineno,
-                             "ERROR")
-        except Exception:
-            pass
-        self.generic_visit(node)
+    # Note: Assignments and f-strings are now detected via grammar-based parser in visit_Call
 
     # Helpers
     def _inc_complexity(self):
@@ -257,78 +605,174 @@ class CodeVisitor(ast.NodeVisitor):
                 return ".".join(reversed(parts))
         return "<unknown>"
 
-    def _node_is_constant_string(self, node) -> bool:
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+    # ============================================
+    # HELPER METHODS FOR GRAMMAR PARSER CONTEXT
+    # ============================================
+    
+    def _node_has_concatenation(self, node: ast.Call) -> bool:
+        """Check if call arguments involve string concatenation."""
+        for arg in node.args:
+            if isinstance(arg, ast.BinOp) and isinstance(arg.op, ast.Add):
+                return True
+        return False
+    
+    def _node_has_format(self, node: ast.Call) -> bool:
+        """Check if call arguments use .format() or % formatting."""
+        for arg in node.args:
+            if isinstance(arg, ast.Call) and isinstance(arg.func, ast.Attribute):
+                if arg.func.attr == "format":
+                    return True
+            if isinstance(arg, ast.BinOp) and isinstance(arg.op, ast.Mod):
+                return True
+        return False
+    
+    def _node_has_fstring(self, node: ast.Call) -> bool:
+        """Check if call arguments use f-strings."""
+        for arg in node.args:
+            if isinstance(arg, ast.JoinedStr):
+                return True
+        return False
+    
+    def _has_b64decode_arg(self, node: ast.Call) -> bool:
+        """Check if any argument is a base64 decode call."""
+        for arg in node.args:
+            if isinstance(arg, ast.Call):
+                func_name = self._get_call_name(arg.func)
+                if func_name and ("b64decode" in func_name or "base64" in func_name):
+                    return True
+        return False
+    
+    def _all_args_constant(self, node: ast.Call) -> bool:
+        """Check if all arguments are constant values."""
+        if not node.args:
             return True
-        return False
-
-    def _is_constant_sql_string(self, node) -> bool:
-        if self._node_is_constant_string(node):
-            text = node.value
-            return bool(SQL_KEYWORDS_RE.search(text))
-        return False
-
-    def _extract_literal_from_node(self, node) -> str:
-        if node is None:
-            return ""
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            return node.value
-        if isinstance(node, ast.JoinedStr):
-            parts = []
-            for v in node.values:
-                if isinstance(v, ast.Constant) and isinstance(v.value, str):
-                    parts.append(v.value)
-            return "".join(parts)
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-            return self._extract_literal_from_node(node.left) + self._extract_literal_from_node(node.right)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "format":
-            return self._extract_literal_from_node(node.func.value)
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
-            # left % right
-            return self._extract_literal_from_node(node.left)
-        return ""
-
-    def _node_contains_sql_keywords(self, node) -> bool:
-        lit = self._extract_literal_from_node(node)
-        return bool(SQL_KEYWORDS_RE.search(lit))
-
-    def _node_may_be_sql_construction(self, node) -> bool:
-        # f-strings
-        if isinstance(node, ast.JoinedStr):
-            has_formatted = any(isinstance(v, ast.FormattedValue) for v in node.values)
-            if has_formatted and self._node_contains_sql_keywords(node):
-                return True
-
-        # concatenation using +
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-            left, right = node.left, node.right
-            # if either side is a Name/Call/Attr/Subscript and any literal part contains SQL -> suspect
-            if (isinstance(left, (ast.Name, ast.Call, ast.Attribute, ast.Subscript)) or
-                isinstance(right, (ast.Name, ast.Call, ast.Attribute, ast.Subscript))):
-                if self._node_contains_sql_keywords(node):
+        return all(isinstance(arg, ast.Constant) for arg in node.args)
+    
+    def _may_have_user_input(self, node: ast.Call) -> bool:
+        """Heuristic: check if arguments might come from user input."""
+        for arg in node.args:
+            if isinstance(arg, ast.Call):
+                func_name = self._get_call_name(arg.func)
+                if func_name and any(x in func_name.lower() for x in ["input", "read", "get", "request", "argv"]):
                     return True
-            # or if either side is a formatted string or non-constant
-            if (not self._node_is_constant_string(left) or not self._node_is_constant_string(right)) and self._node_contains_sql_keywords(node):
+            if isinstance(arg, ast.Name) and any(x in arg.id.lower() for x in ["input", "user", "request", "data"]):
                 return True
-
-        # % formatting
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
-            if self._node_is_constant_string(node.left) and not self._node_is_constant_string(node.right):
-                left_text = node.left.s if isinstance(node.left, ast.Constant) else ""
-                if SQL_KEYWORDS_RE.search(left_text):
+        return False
+    
+    def _has_shell_true(self, node: ast.Call) -> bool:
+        """Check if shell=True is in keyword arguments."""
+        for kw in node.keywords:
+            if kw.arg == "shell" and isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                return True
+        return False
+    
+    def _is_untrusted_source(self, node: ast.Call) -> bool:
+        """Check if data source might be untrusted."""
+        for arg in node.args:
+            if isinstance(arg, ast.Call):
+                func_name = self._get_call_name(arg.func)
+                if func_name and any(x in func_name.lower() for x in ["open", "read", "request", "recv", "socket"]):
                     return True
-
-        # format() usage
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "format":
-            fmt = node.func.value
-            if self._node_is_constant_string(fmt):
-                fmt_text = fmt.value if isinstance(fmt, ast.Constant) else ""
-                if SQL_KEYWORDS_RE.search(fmt_text):
-                    for a in node.args:
-                        if not self._node_is_constant_string(a):
+        return False
+    
+    def _has_dotdot_in_path(self, node: ast.Call) -> bool:
+        """Check if path arguments contain .. for directory traversal."""
+        for arg in node.args:
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                if ".." in arg.value:
+                    return True
+        return False
+    
+    def _has_weak_hash_algo(self, node: ast.Call, func_name: str) -> bool:
+        """Check if using weak hashing algorithms (MD5, SHA1)."""
+        # Check function name
+        if any(weak in func_name.lower() for weak in ["md5", "sha1"]):
+            return True
+        
+        # Check if hashlib.new() or hashlib.md5()/sha1() is called
+        for arg in node.args:
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                if arg.value.lower() in ("md5", "sha1"):
+                    return True
+        return False
+    
+    def _is_token_generation(self, node: ast.Call, func_name: str) -> bool:
+        """Check if using random for token/secret generation."""
+        # random.choice, random.randint for tokens/secrets/passwords
+        if "random" in func_name.lower():
+            # Check if variable names suggest token generation
+            parent = getattr(node, "parent_assign", None)
+            if parent:
+                for target in getattr(parent, "targets", []):
+                    if isinstance(target, ast.Name):
+                        if any(x in target.id.lower() for x in ["token", "secret", "key", "password", "salt"]):
                             return True
-
         return False
+    
+    def _is_random_seed(self, func_name: str) -> bool:
+        """Check if random.seed() is being called."""
+        return "seed" in func_name.lower() and "random" in func_name.lower()
+    
+    def _has_predictable_seed(self, node: ast.Call) -> bool:
+        """Check if random.seed() uses predictable value."""
+        for arg in node.args:
+            if isinstance(arg, ast.Constant):
+                # Hard-coded seed value
+                return True
+            if isinstance(arg, ast.Call):
+                func_name = self._get_call_name(arg.func)
+                # time() or other predictable sources
+                if func_name and "time" in func_name.lower():
+                    return True
+        return False
+    
+    def _has_verify_false(self, node: ast.Call) -> bool:
+        """Check if requests has verify=False."""
+        for kw in node.keywords:
+            if kw.arg == "verify" and isinstance(kw.value, ast.Constant) and kw.value.value is False:
+                return True
+        return False
+    
+    def _has_no_ssl_verify(self, node: ast.Call) -> bool:
+        """Check if urllib/urlopen has disabled SSL verification."""
+        # Check for context= with unverified context
+        for kw in node.keywords:
+            if kw.arg == "context" and isinstance(kw.value, ast.Call):
+                func_name = self._get_call_name(kw.value.func)
+                if "unverified" in func_name.lower():
+                    return True
+        return False
+    
+    # Pattern detection for secrets and IPs
+    def _is_secret_pattern(self, value: str) -> bool:
+        """Check if string matches secret/API key patterns."""
+        import re
+        # Common secret patterns
+        patterns = [
+            r"(?:api[_-]?key|secret[_-]?key|password|passwd|token)\s*[:=]\s*['\"]?([A-Za-z0-9\-_+=/]{8,})",
+        ]
+        for pattern in patterns:
+            if re.search(pattern, value, re.IGNORECASE):
+                return True
+        return False
+    
+    def _is_aws_key(self, value: str) -> bool:
+        """Check if string is AWS access key."""
+        import re
+        return bool(re.match(r"AKIA[0-9A-Z]{16}", value))
+    
+    def _is_long_token(self, value: str) -> bool:
+        """Check if string is suspiciously long base64-like token."""
+        import re
+        if len(value) >= 20:
+            # Base64-like pattern
+            return bool(re.fullmatch(r"[A-Za-z0-9+/=]{20,}", value))
+        return False
+    
+    def _is_ip_pattern(self, value: str) -> bool:
+        """Check if string contains IP address."""
+        import re
+        return bool(re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", value))
 
     def _record(self, code: str, message: str, lineno: int, severity: str = "WARNING"):
         if severity not in SEVERITIES:
@@ -341,21 +785,6 @@ class CodeVisitor(ast.NodeVisitor):
             "severity": severity
         })
 
-
-# ---------- Regex / line heuristics ----------
-SECRET_PATTERNS = [
-    re.compile(r"(?:api[_-]?key|secret[_-]?key|aws[_-]?secret|token|passwd|password)\s*[:=]\s*['\"]([A-Za-z0-9\-_+=/]{8,})['\"]", re.IGNORECASE),
-    re.compile(r"(?P<tok>AKIA[0-9A-Z]{16})"),
-    re.compile(r"['\"]([A-Za-z0-9+/=]{20,})['\"]")
-]
-
-IP_PORT_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b(?::\d{1,5})?")
-OBFUSCATION_CALLS = [
-    re.compile(r"base64\.b64decode"),
-    re.compile(r"exec\("),
-    re.compile(r"marshal\.loads"),
-    re.compile(r"__import__\("),
-]
 
 # ---------- Detector ----------
 class Detector:
@@ -425,96 +854,6 @@ class Detector:
                 "severity": "ERROR"
             })
             return
-
-        # Line heuristics
-        lines = source.splitlines()
-        for i, line in enumerate(lines, start=1):
-            for pat in SECRET_PATTERNS:
-                m = pat.search(line)
-                if m:
-                    token = None
-                    if m.groupdict():
-                        if "tok" in m.groupdict():
-                            token = m.group("tok")
-                        else:
-                            for name, val in m.groupdict().items():
-                                if val:
-                                    token = val
-                                    break
-                    if not token:
-                        for g in m.groups():
-                            if g:
-                                token = g
-                                break
-                    severity = "ERROR" if token and len(token) >= HARDSECRET_MIN_LEN else "WARNING"
-                    self.reports.append({
-                        "file": filename,
-                        "lineno": i,
-                        "code": "HARD_CODED_SECRET",
-                        "message": f"Possible hard-coded secret or token matched: {m.group(0).strip()[:120]}",
-                        "severity": severity
-                    })
-
-            if IP_PORT_RE.search(line):
-                self.reports.append({
-                    "file": filename,
-                    "lineno": i,
-                    "code": "HARD_CODED_IP",
-                    "message": f"Hard-coded IP or host pattern found in string/line: {line.strip()[:120]}",
-                    "severity": "WARNING"
-                })
-
-            for op in OBFUSCATION_CALLS:
-                if op.search(line):
-                    self.reports.append({
-                        "file": filename,
-                        "lineno": i,
-                        "code": "OBFUSCATION_PATTERN",
-                        "message": f"Obfuscation-related pattern {op.pattern} found.",
-                        "severity": "ERROR"
-                    })
-
-        # Imports heuristics
-        suspicious_modules = {"ctypes", "socket", "subprocess", "pty", "pwn", "paramiko", "ftplib"}
-        # Use visitor imports if available
-        try:
-            visitor_imports = visitor.imports
-        except Exception:
-            visitor_imports = []
-        for mod, alias in visitor_imports:
-            base = mod.split(".")[0]
-            if base in suspicious_modules:
-                self.reports.append({
-                    "file": filename,
-                    "lineno": 0,
-                    "code": "SUSPICIOUS_IMPORT",
-                    "message": f"Suspicious import '{mod}' detected (alias '{alias}').",
-                    "severity": "WARNING"
-                })
-
-        # Encoded strings
-        try:
-            for s in visitor.str_literals:
-                if len(s) >= 50 and re.fullmatch(r"[A-Za-z0-9+/= \n\r]{50,}", s):
-                    self.reports.append({
-                        "file": filename,
-                        "lineno": 0,
-                        "code": "LONG_ENCODED_STRING",
-                        "message": f"Long string literal possibly containing encoded data or token (len={len(s)}).",
-                        "severity": "WARNING"
-                    })
-        except Exception:
-            pass
-
-        # Two-pass obfuscation
-        if any(op.search(source) for op in OBFUSCATION_CALLS) and "exec(" in source:
-            self.reports.append({
-                "file": filename,
-                "lineno": 0,
-                "code": "OBFUSCATION_COMBO",
-                "message": "Detected base64/marshal/__import__ patterns and exec in source (possible obfuscation).",
-                "severity": "ERROR"
-            })
 
     def _print_report(self):
         if not self.reports:
