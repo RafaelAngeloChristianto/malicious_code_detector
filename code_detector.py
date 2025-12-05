@@ -233,9 +233,40 @@ VULN_ACTION_TABLE = {
 }
 
 # GOTO table for non-terminals
+# Maps (state, non-terminal) -> next_state
+# In traditional LR parsing, after reducing to a non-terminal,
+# we use GOTO to determine the next state
 VULN_GOTO_TABLE = {
-    0: {"VULN": 100},
-    # Add more GOTO states as needed
+    0: {"VULN": 200, "SQL_CALL": 201, "EXEC_CALL": 202, "SYSTEM_CALL": 203},
+    1: {"SQL_CALL": 201},
+    10: {"EXEC_CALL": 202},
+    20: {"SYSTEM_CALL": 203, "SUBPROCESS": 204},
+    30: {"OS_SYSTEM": 205},
+    40: {"PICKLE_LOAD": 206},
+    50: {"FILE_OPEN": 207, "PATH_OP": 208},
+    60: {"ASSIGN": 209},
+    70: {"STRING_LITERAL": 210},
+    80: {"HASH_CALL": 211},
+    90: {"RANDOM_CALL": 212, "RANDOM_SEED": 213},
+    100: {"REQUESTS_CALL": 214},
+    110: {"URLLIB_CALL": 215},
+    # Accept states (after VULN recognized)
+    200: {},  # VULN recognized - vulnerability found
+    201: {},  # SQL_CALL recognized
+    202: {},  # EXEC_CALL recognized
+    203: {},  # SYSTEM_CALL recognized
+    204: {},  # SUBPROCESS recognized
+    205: {},  # OS_SYSTEM recognized
+    206: {},  # PICKLE_LOAD recognized
+    207: {},  # FILE_OPEN recognized
+    208: {},  # PATH_OP recognized
+    209: {},  # ASSIGN recognized
+    210: {},  # STRING_LITERAL recognized
+    211: {},  # HASH_CALL recognized
+    212: {},  # RANDOM_CALL recognized
+    213: {},  # RANDOM_SEED recognized
+    214: {},  # REQUESTS_CALL recognized
+    215: {},  # URLLIB_CALL recognized
 }
 
 class VulnerabilityParser:
@@ -367,11 +398,18 @@ class VulnerabilityParser:
         """
         Parse tokens using ACTION/GOTO tables to detect vulnerability patterns.
         Returns vulnerability finding if pattern matches, None otherwise.
+        
+        This implements a standard LR parser:
+        1. Maintain state stack
+        2. Look up ACTION[state][token]
+        3. SHIFT: push state, advance input
+        4. REDUCE: pop symbols, apply production, use GOTO for next state
         """
         if not tokens or len(tokens) < 2:
             return None
             
-        stack = [0]
+        stack = [0]  # State stack (like in examplecode.py)
+        symbol_stack = []  # Symbol stack for debugging
         idx = 0
         
         while idx < len(tokens):
@@ -388,14 +426,34 @@ class VulnerabilityParser:
             action_type, value = action
             
             if action_type == "shift":
+                # SHIFT: push new state, consume token
                 stack.append(value)
+                symbol_stack.append(lookahead)
                 idx += 1
                 
             elif action_type == "reduce":
-                # Found a vulnerability pattern
+                # REDUCE: apply grammar production
                 prod = VULNERABILITY_GRAMMAR[value]
                 lhs, rhs, severity, message = prod
                 
+                # Pop RHS symbols from stacks (standard LR behavior)
+                for _ in range(len(rhs)):
+                    if stack:
+                        stack.pop()
+                    if symbol_stack:
+                        symbol_stack.pop()
+                
+                # Use GOTO table to find next state after reducing to LHS
+                if stack:
+                    current_state = stack[-1]
+                    goto_states = VULN_GOTO_TABLE.get(current_state, {})
+                    next_state = goto_states.get(lhs)
+                    
+                    if next_state is not None:
+                        stack.append(next_state)
+                        symbol_stack.append(lhs)
+                
+                # Vulnerability detected! Return finding
                 return {
                     "file": filename,
                     "lineno": lineno,
@@ -403,7 +461,8 @@ class VulnerabilityParser:
                     "message": f"Grammar-based detection: {message}",
                     "severity": severity,
                     "pattern": " -> ".join(rhs),
-                    "tokens": tokens[:-1]  # Exclude '$'
+                    "tokens": tokens[:-1],  # Exclude '$'
+                    "parse_stack": list(stack),  # Include for debugging
                 }
                 
         return None

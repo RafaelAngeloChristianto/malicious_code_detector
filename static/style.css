@@ -1,10 +1,18 @@
 body { font-family: Arial, sans-serif; background: #f7f7f7; color: #222; }
 .container { max-width: 900px; margin: 24px auto; background: #fff; padding: 20px; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
-.file-area { margin-top: 16px; border: 1px solid #ddd; padding: 12px; font-family: monospace; font-size: 13px; background: #fafafa; max-height: 600px; overflow: auto; }
-.line { display: block; padding: 2px 6px; white-space: pre; }
 .line-number { display: inline-block; width: 48px; color: #777; }
 .line-content { display: inline-block; }
 .flag { margin-left: 8px; padding: 2px 6px; border-radius: 4px; background: #c00; color: #fff; font-size: 11px; }
+.pattern-info { 
+  display: inline-block; 
+  margin-left: 4px; 
+  padding: 1px 4px; 
+  background: rgba(255, 255, 255, 0.2); 
+  border-radius: 3px; 
+  font-size: 10px; 
+  font-family: 'Courier New', monospace;
+  color: #ffeb3b;
+}
 .flagged { background: rgba(248, 248, 248, 0); }
 .small { font-size: 12px; color: #555; }
 .flash { outline: 2px solid #ffeb3b; box-shadow: 0 0 8px #ffd54f; }
@@ -32,10 +40,36 @@ button:hover { background: #f0f0f0; }
 /* Layout */
 .layout { display: grid; grid-template-columns: 1fr 320px; gap: 16px; align-items: start; }
 .side-panel { position: sticky; top: 18px; }
+.main { 
+  max-width: calc(100vw - 400px); /* Leave room for sidebar */
+  overflow-x: auto; 
+}
 .main h1 { margin-top: 0; }
 
 /* Left-align main layout container so content starts from left edge */
 .container.layout { max-width: none; width: auto; margin: 24px; }
+
+/* Code area scrolling */
+.file-area { 
+  margin-top: 16px; 
+  border: 1px solid #ddd; 
+  padding: 12px; 
+  font-family: monospace; 
+  font-size: 13px; 
+  background: #fafafa; 
+  max-height: 600px; 
+  overflow: auto;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+/* Line content wrapping control */
+.line { 
+  display: block; 
+  padding: 2px 6px; 
+  white-space: pre-wrap; /* Allow wrapping but preserve spaces */
+  word-break: break-word; /* Break long words if needed */
+}
 
 /* Prism code block styles (in case we use pre/code) */
 .code-block { font-family: monospace; font-size: 13px; }

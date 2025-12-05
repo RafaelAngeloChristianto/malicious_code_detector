@@ -27,6 +27,12 @@ document.getElementById('uploadForm').addEventListener('submit', async (ev) => {
   const errorCount = data.findings.filter(f => f.severity === 'ERROR').length;
   const warningCount = data.findings.filter(f => f.severity === 'WARNING').length;
   const infoCount = data.findings.filter(f => f.severity === 'INFO').length;
+  
+  // Grammar-based detection statistics
+  const grammarFindings = data.findings.filter(f => f.code === 'GRAMMAR_VULN');
+  const grammarCount = grammarFindings.length;
+  const uniquePatterns = new Set(grammarFindings.map(f => f.pattern).filter(Boolean));
+  
   const typeCounts = {};
   for (const f of data.findings) {
     typeCounts[f.code] = (typeCounts[f.code] || 0) + 1;
@@ -40,6 +46,29 @@ document.getElementById('uploadForm').addEventListener('submit', async (ev) => {
   if (elWarn) elWarn.textContent = warningCount;
   const elInfo = document.getElementById('infoCount');
   if (elInfo) elInfo.textContent = infoCount;
+  
+  // Update grammar info section
+  if (grammarCount > 0) {
+    document.getElementById('grammarInfo').style.display = 'block';
+    document.getElementById('grammarCount').textContent = 
+      `${grammarCount} vulnerabilities detected via formal grammar parser`;
+  } else {
+    document.getElementById('grammarInfo').style.display = 'none';
+  }
+  
+  // Build pattern-based type counts for grammar findings
+  const patternCounts = {};
+  for (const f of data.findings) {
+    // For grammar findings, use pattern as the type key
+    if (f.code === 'GRAMMAR_VULN' && f.pattern) {
+      const patternKey = f.pattern;
+      patternCounts[patternKey] = (patternCounts[patternKey] || 0) + 1;
+    } else {
+      // For non-grammar findings, use code as before
+      patternCounts[f.code] = (patternCounts[f.code] || 0) + 1;
+    }
+  }
+  
   const typeList = document.getElementById('typeList');
   typeList.innerHTML = '';
   // create a master "Toggle All" checkbox
@@ -90,7 +119,7 @@ document.getElementById('uploadForm').addEventListener('submit', async (ev) => {
     allChk.indeterminate = false;
   });
 
-  Object.entries(typeCounts).sort((a,b)=>b[1]-a[1]).forEach(([code,count])=>{
+  Object.entries(patternCounts).sort((a,b)=>b[1]-a[1]).forEach(([code,count])=>{
     const li = document.createElement('li');
     li.style.listStyle = 'none';
     const id = 'type_' + code.replace(/[^A-Za-z0-9_\-]/g, '_');
@@ -123,8 +152,11 @@ document.getElementById('uploadForm').addEventListener('submit', async (ev) => {
     div.className = 'line';
     div.id = 'line-' + ln;
     div.dataset.line = ln;
-    // annotate codes present on this line for filtering
-    const codes = (findingsByLine[ln] || []).map(x => x.code);
+    // annotate codes/patterns present on this line for filtering
+    const codes = (findingsByLine[ln] || []).map(f => {
+      // Use pattern for grammar findings, code for others
+      return (f.code === 'GRAMMAR_VULN' && f.pattern) ? f.pattern : f.code;
+    });
     div.dataset.codes = codes.join(',');
     const num = document.createElement('span');
     num.className = 'line-number';
@@ -149,12 +181,37 @@ document.getElementById('uploadForm').addEventListener('submit', async (ev) => {
       for (const f of findingsByLine[ln]) {
         const badge = document.createElement('span');
         badge.className = 'flag';
-        badge.textContent = `${f.severity}: ${f.code}`;
-        badge.title = f.message;
+        
+        // Enhanced display for grammar-based detections
+        if (f.code === 'GRAMMAR_VULN') {
+          badge.textContent = `${f.severity}: ${f.code}`;
+          // Add pattern information if available
+          if (f.pattern) {
+            const patternSpan = document.createElement('span');
+            patternSpan.className = 'pattern-info';
+            patternSpan.textContent = ` [${f.pattern}]`;
+            badge.appendChild(patternSpan);
+          }
+          // Build detailed tooltip
+          let tooltipText = f.message;
+          if (f.pattern) tooltipText += `\nPattern: ${f.pattern}`;
+          if (f.tokens) tooltipText += `\nTokens: [${f.tokens.join(', ')}]`;
+          if (f.parse_stack) tooltipText += `\nParser States: [${f.parse_stack.join(', ')}]`;
+          badge.title = tooltipText;
+        } else {
+          badge.textContent = `${f.severity}: ${f.code}`;
+          badge.title = f.message;
+        }
+        
         div.appendChild(badge);
       }
       // tooltip on the line summarizing findings
-      const tip = findingsByLine[ln].map(x=>`[${x.severity}] ${x.code}: ${x.message}`).join('\n');
+      const tip = findingsByLine[ln].map(x => {
+        let msg = `[${x.severity}] ${x.code}: ${x.message}`;
+        if (x.pattern) msg += `\n  → Pattern: ${x.pattern}`;
+        if (x.tokens) msg += `\n  → Tokens: [${x.tokens.join(', ')}]`;
+        return msg;
+      }).join('\n\n');
       div.title = tip;
     }
     fileArea.appendChild(div);
