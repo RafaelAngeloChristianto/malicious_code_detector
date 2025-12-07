@@ -58,15 +58,12 @@ VULNERABILITY_GRAMMAR = [
     ("VULN", ["ASSIGN", "AWS_KEY"], "ERROR", "Hard-coded AWS access key"),
     ("VULN", ["ASSIGN", "LONG_TOKEN"], "WARNING", "Suspicious hard-coded token or credential"),
     
-    # Hard-coded IP addresses (19)
-    ("VULN", ["STRING_LITERAL", "IP_PATTERN"], "WARNING", "Hard-coded IP address detected"),
-    
-    # Insecure cryptography (20-22)
+    # Insecure cryptography (19-21)
     ("VULN", ["HASH_CALL", "WEAK_ALGO"], "ERROR", "Weak cryptographic hash algorithm (MD5/SHA1)"),
     ("VULN", ["RANDOM_CALL", "TOKEN_GEN"], "ERROR", "Insecure random for cryptographic token generation"),
     ("VULN", ["RANDOM_SEED", "PREDICTABLE"], "WARNING", "Predictable random seed"),
     
-    # Insecure network operations (23-24)
+    # Insecure network operations (22-23)
     ("VULN", ["REQUESTS_CALL", "VERIFY_FALSE"], "ERROR", "SSL certificate verification disabled"),
     ("VULN", ["URLLIB_CALL", "NO_VERIFY"], "WARNING", "Insecure HTTPS context"),
 ]
@@ -187,48 +184,41 @@ VULN_ACTION_TABLE = {
     64: {  # SQL concatenation in assignment
         "$": ("reduce", 4),
     },
-    70: {  # string literals
-        "ip_pattern": ("shift", 71),
-        "$": ("reduce", 19),
-    },
-    71: {
-        "$": ("reduce", 19),
-    },
     80: {  # hashlib calls
         "weak_algo": ("shift", 81),
-        "$": ("reduce", 20),
+        "$": ("reduce", 19),
     },
     81: {
-        "$": ("reduce", 20),
+        "$": ("reduce", 19),
     },
     90: {  # random module
         "token_gen": ("shift", 91),
         "seed": ("shift", 92),
-        "$": ("reduce", 21),
+        "$": ("reduce", 20),
     },
     91: {
-        "$": ("reduce", 21),
+        "$": ("reduce", 20),
     },
     92: {
         "predictable": ("shift", 93),
-        "$": ("reduce", 22),
+        "$": ("reduce", 21),
     },
     93: {
-        "$": ("reduce", 22),
+        "$": ("reduce", 21),
     },
     100: {  # requests module
         "verify_false": ("shift", 101),
-        "$": ("reduce", 23),
+        "$": ("reduce", 22),
     },
     101: {
-        "$": ("reduce", 23),
+        "$": ("reduce", 22),
     },
     110: {  # urllib module
         "no_verify": ("shift", 111),
-        "$": ("reduce", 24),
+        "$": ("reduce", 23),
     },
     111: {
-        "$": ("reduce", 24),
+        "$": ("reduce", 23),
     },
 }
 
@@ -277,6 +267,7 @@ class VulnerabilityParser:
     
     def __init__(self):
         self.findings: List[Dict[str, Any]] = []
+        self.parse_traces: List[Dict[str, Any]] = []  # Store parse tree traces
         
     def tokenize_pattern(self, node_type: str, context: Dict[str, Any]) -> List[str]:
         """
@@ -383,11 +374,6 @@ class VulnerabilityParser:
             elif context.get("has_sql_concat"):
                 tokens.append("sql_concat")
         
-        elif node_type == "Constant":
-            tokens.append("string")
-            if context.get("has_ip_pattern"):
-                tokens.append("ip_pattern")
-        
         # End-of-input marker
         if tokens:
             tokens.append("$")
@@ -412,6 +398,10 @@ class VulnerabilityParser:
         symbol_stack = []  # Symbol stack for debugging
         idx = 0
         
+        # Capture parse trace for visualization
+        parse_steps = []
+        step_num = 0
+        
         while idx < len(tokens):
             state = stack[-1]
             lookahead = tokens[idx]
@@ -426,6 +416,19 @@ class VulnerabilityParser:
             action_type, value = action
             
             if action_type == "shift":
+                # Record SHIFT step
+                step_num += 1
+                parse_steps.append({
+                    "step": step_num,
+                    "action": "SHIFT",
+                    "state": state,
+                    "lookahead": lookahead,
+                    "next_state": value,
+                    "stack_before": list(stack),
+                    "symbols_before": list(symbol_stack),
+                    "input_remaining": tokens[idx:]
+                })
+                
                 # SHIFT: push new state, consume token
                 stack.append(value)
                 symbol_stack.append(lookahead)
@@ -436,6 +439,19 @@ class VulnerabilityParser:
                 prod = VULNERABILITY_GRAMMAR[value]
                 lhs, rhs, severity, message = prod
                 
+                # Record REDUCE step
+                step_num += 1
+                reduce_step = {
+                    "step": step_num,
+                    "action": "REDUCE",
+                    "state": state,
+                    "production": f"{lhs} -> {' '.join(rhs)}",
+                    "production_num": value,
+                    "stack_before": list(stack),
+                    "symbols_before": list(symbol_stack),
+                    "input_remaining": tokens[idx:]
+                }
+                
                 # Pop RHS symbols from stacks (standard LR behavior)
                 for _ in range(len(rhs)):
                     if stack:
@@ -444,14 +460,34 @@ class VulnerabilityParser:
                         symbol_stack.pop()
                 
                 # Use GOTO table to find next state after reducing to LHS
+                goto_state = None
                 if stack:
                     current_state = stack[-1]
                     goto_states = VULN_GOTO_TABLE.get(current_state, {})
                     next_state = goto_states.get(lhs)
                     
                     if next_state is not None:
+                        goto_state = next_state
                         stack.append(next_state)
                         symbol_stack.append(lhs)
+                
+                reduce_step["goto_state"] = goto_state
+                reduce_step["stack_after"] = list(stack)
+                reduce_step["symbols_after"] = list(symbol_stack)
+                parse_steps.append(reduce_step)
+                
+                # Store parse trace for this detection
+                parse_trace = {
+                    "filename": filename,
+                    "lineno": lineno,
+                    "tokens": tokens[:-1],
+                    "steps": parse_steps,
+                    "vulnerability": lhs,
+                    "pattern": " -> ".join(rhs),
+                    "severity": severity,
+                    "message": message
+                }
+                self.parse_traces.append(parse_trace)
                 
                 # Vulnerability detected! Return finding
                 return {
@@ -463,6 +499,7 @@ class VulnerabilityParser:
                     "pattern": " -> ".join(rhs),
                     "tokens": tokens[:-1],  # Exclude '$'
                     "parse_stack": list(stack),  # Include for debugging
+                    "parse_trace": parse_trace  # Include full trace
                 }
                 
         return None
@@ -508,19 +545,6 @@ class CodeVisitor(ast.NodeVisitor):
     def visit_Constant(self, node: ast.Constant):
         if isinstance(node.value, str):
             self.str_literals.append(node.value)
-            
-            # Grammar-based detection for hard-coded secrets and IPs
-            context = {
-                "value": node.value,
-                "has_ip_pattern": self._is_ip_pattern(node.value),
-            }
-            
-            grammar_finding = self.grammar_parser.analyze_node_with_grammar(
-                "Constant", context, self.filename, node.lineno
-            )
-            
-            if grammar_finding:
-                self.findings.append(grammar_finding)
         
         self.generic_visit(node)
     
@@ -827,11 +851,6 @@ class CodeVisitor(ast.NodeVisitor):
             # Base64-like pattern
             return bool(re.fullmatch(r"[A-Za-z0-9+/=]{20,}", value))
         return False
-    
-    def _is_ip_pattern(self, value: str) -> bool:
-        """Check if string contains IP address."""
-        import re
-        return bool(re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", value))
 
     def _record(self, code: str, message: str, lineno: int, severity: str = "WARNING"):
         if severity not in SEVERITIES:

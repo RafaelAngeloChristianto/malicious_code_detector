@@ -11,6 +11,10 @@ document.getElementById('uploadForm').addEventListener('submit', async (ev) => {
   }
   const data = await res.json();
   document.getElementById('fname').textContent = data.filename;
+  
+  // Render parse tree visualization if available
+  renderParseTraces(data.parse_traces || []);
+  
   const fileArea = document.getElementById('fileArea');
   fileArea.innerHTML = '';
   const lines = data.content.split('\n');
@@ -178,9 +182,24 @@ document.getElementById('uploadForm').addEventListener('submit', async (ev) => {
     div.appendChild(content);
     if (findingsByLine[ln]) {
       div.classList.add('flagged');
+      
+      // Add severity-based class to the line for proper highlighting colors
+      const severities = findingsByLine[ln].map(f => f.severity.toLowerCase());
+      if (severities.includes('error')) {
+        div.classList.add('error-line');
+      } else if (severities.includes('warning')) {
+        div.classList.add('warning-line');
+      } else if (severities.includes('info')) {
+        div.classList.add('info-line');
+      }
+      
       for (const f of findingsByLine[ln]) {
         const badge = document.createElement('span');
         badge.className = 'flag';
+        
+        // Add severity-specific class to badge
+        const severityClass = f.severity.toLowerCase();
+        badge.classList.add(severityClass);
         
         // Enhanced display for grammar-based detections
         if (f.code === 'GRAMMAR_VULN') {
@@ -268,3 +287,219 @@ document.getElementById('uploadForm').addEventListener('submit', async (ev) => {
       console.warn('Chart error', e);
     }
 });
+
+// ============================================
+// PARSE TREE VISUALIZATION FUNCTIONS
+// ============================================
+
+function renderParseTraces(parseTraces) {
+  const section = document.getElementById('parseTreeSection');
+  const container = document.getElementById('parseTreeContainer');
+  
+  if (!parseTraces || parseTraces.length === 0) {
+    section.style.display = 'none';
+    return;
+  }
+  
+  section.style.display = 'block';
+  container.innerHTML = '';
+  
+  // Add legend
+  const legend = document.createElement('div');
+  legend.className = 'parse-tree-legend';
+  legend.innerHTML = `
+    <div class="legend-item">
+      <span class="legend-color" style="background:#e3f2fd;"></span>
+      <span>SHIFT: Push state, consume token</span>
+    </div>
+    <div class="legend-item">
+      <span class="legend-color" style="background:#fce4ec;"></span>
+      <span>REDUCE: Apply grammar rule</span>
+    </div>
+    <div class="legend-item">
+      <span class="legend-color" style="background:#fff9c4;"></span>
+      <span>Tokens: Input sequence</span>
+    </div>
+  `;
+  container.appendChild(legend);
+  
+  // Render each parse trace
+  parseTraces.forEach((trace, idx) => {
+    const traceDiv = document.createElement('div');
+    traceDiv.className = 'parse-trace-item';
+    
+    // Header
+    const header = document.createElement('div');
+    header.className = 'parse-trace-header';
+    header.innerHTML = `
+      <div class="parse-trace-title">
+        Parse Trace #${idx + 1}: ${trace.vulnerability} Detection
+      </div>
+      <div class="parse-trace-meta">
+        Line ${trace.lineno} | ${trace.severity}
+      </div>
+    `;
+    traceDiv.appendChild(header);
+    
+    // Message and pattern
+    const info = document.createElement('div');
+    info.style.marginBottom = '8px';
+    info.innerHTML = `
+      <div style="font-size:13px; color:#333; margin-bottom:4px;">
+        <strong>Message:</strong> ${trace.message}
+      </div>
+      <div style="font-size:12px; color:#666;">
+        <strong>Pattern:</strong> <code>${trace.pattern}</code>
+      </div>
+    `;
+    traceDiv.appendChild(info);
+    
+    // Tokens
+    const tokensDiv = document.createElement('div');
+    tokensDiv.className = 'parse-trace-tokens';
+    tokensDiv.innerHTML = `<strong>Tokens:</strong> [${trace.tokens.map(t => `"${t}"`).join(', ')}]`;
+    traceDiv.appendChild(tokensDiv);
+    
+    // Parse steps table
+    if (trace.steps && trace.steps.length > 0) {
+      const stepsTitle = document.createElement('div');
+      stepsTitle.style.marginTop = '12px';
+      stepsTitle.style.marginBottom = '6px';
+      stepsTitle.style.fontWeight = 'bold';
+      stepsTitle.style.fontSize = '13px';
+      stepsTitle.innerHTML = `Parse Steps (LR Parser Trace):`;
+      traceDiv.appendChild(stepsTitle);
+      
+      const tableDiv = document.createElement('div');
+      tableDiv.style.overflowX = 'auto';
+      
+      const table = document.createElement('table');
+      table.className = 'parse-steps-table';
+      
+      // Table header
+      const thead = document.createElement('thead');
+      thead.innerHTML = `
+        <tr>
+          <th style="width:40px;">Step</th>
+          <th style="width:80px;">Action</th>
+          <th style="width:60px;">State</th>
+          <th style="width:100px;">Lookahead</th>
+          <th style="min-width:150px;">Production / Next State</th>
+          <th style="min-width:120px;">Stack</th>
+          <th style="min-width:120px;">Symbols</th>
+          <th style="min-width:150px;">Remaining Input</th>
+        </tr>
+      `;
+      table.appendChild(thead);
+      
+      // Table body
+      const tbody = document.createElement('tbody');
+      trace.steps.forEach(step => {
+        const tr = document.createElement('tr');
+        
+        // Step number
+        const tdStep = document.createElement('td');
+        tdStep.textContent = step.step;
+        tdStep.style.textAlign = 'center';
+        tdStep.style.fontWeight = 'bold';
+        tr.appendChild(tdStep);
+        
+        // Action
+        const tdAction = document.createElement('td');
+        const actionSpan = document.createElement('span');
+        actionSpan.className = `parse-step-action ${step.action.toLowerCase()}`;
+        actionSpan.textContent = step.action;
+        tdAction.appendChild(actionSpan);
+        tr.appendChild(tdAction);
+        
+        // State
+        const tdState = document.createElement('td');
+        tdState.innerHTML = `<span class="parse-step-stack">${step.state}</span>`;
+        tdState.style.textAlign = 'center';
+        tr.appendChild(tdState);
+        
+        // Lookahead (only for SHIFT)
+        const tdLookahead = document.createElement('td');
+        if (step.action === 'SHIFT' && step.lookahead) {
+          tdLookahead.innerHTML = `<code style="background:#fff3e0; padding:2px 4px; border-radius:3px;">${step.lookahead}</code>`;
+        } else {
+          tdLookahead.textContent = '—';
+        }
+        tr.appendChild(tdLookahead);
+        
+        // Production / Next State
+        const tdProd = document.createElement('td');
+        if (step.action === 'SHIFT') {
+          tdProd.innerHTML = `→ State <span class="parse-step-stack">${step.next_state}</span>`;
+        } else if (step.action === 'REDUCE') {
+          tdProd.innerHTML = `<div class="parse-step-production">${step.production}</div>`;
+          if (step.goto_state !== null && step.goto_state !== undefined) {
+            const gotoSpan = document.createElement('div');
+            gotoSpan.style.marginTop = '4px';
+            gotoSpan.style.fontSize = '11px';
+            gotoSpan.innerHTML = `GOTO → <span class="parse-step-stack">${step.goto_state}</span>`;
+            tdProd.appendChild(gotoSpan);
+          }
+        }
+        tr.appendChild(tdProd);
+        
+        // Stack
+        const tdStack = document.createElement('td');
+        if (step.action === 'REDUCE' && step.stack_after) {
+          tdStack.innerHTML = `
+            <div style="font-size:10px; color:#999;">Before: <span class="parse-step-stack">[${step.stack_before.join(', ')}]</span></div>
+            <div style="margin-top:2px;">After: <span class="parse-step-stack">[${step.stack_after.join(', ')}]</span></div>
+          `;
+        } else {
+          tdStack.innerHTML = `<span class="parse-step-stack">[${step.stack_before.join(', ')}]</span>`;
+        }
+        tr.appendChild(tdStack);
+        
+        // Symbols
+        const tdSymbols = document.createElement('td');
+        if (step.action === 'REDUCE' && step.symbols_after) {
+          tdSymbols.innerHTML = `
+            <div style="font-size:10px; color:#999;">Before: <span class="parse-step-symbols">[${step.symbols_before.join(', ')}]</span></div>
+            <div style="margin-top:2px;">After: <span class="parse-step-symbols">[${step.symbols_after.join(', ')}]</span></div>
+          `;
+        } else {
+          const symbolsText = step.symbols_before && step.symbols_before.length > 0 
+            ? step.symbols_before.join(', ') 
+            : 'ε';
+          tdSymbols.innerHTML = `<span class="parse-step-symbols">[${symbolsText}]</span>`;
+        }
+        tr.appendChild(tdSymbols);
+        
+        // Remaining input
+        const tdInput = document.createElement('td');
+        const inputText = step.input_remaining && step.input_remaining.length > 0
+          ? step.input_remaining.join(', ')
+          : 'ε';
+        tdInput.innerHTML = `<span class="parse-step-input">[${inputText}]</span>`;
+        tr.appendChild(tdInput);
+        
+        tbody.appendChild(tr);
+      });
+      
+      table.appendChild(tbody);
+      tableDiv.appendChild(table);
+      traceDiv.appendChild(tableDiv);
+    }
+    
+    container.appendChild(traceDiv);
+  });
+  
+  // Toggle button functionality
+  const toggleBtn = document.getElementById('toggleParseTree');
+  if (toggleBtn) {
+    toggleBtn.onclick = () => {
+      if (container.style.display === 'none') {
+        container.style.display = 'block';
+        toggleBtn.textContent = 'Toggle Parse Trees';
+      } else {
+        container.style.display = 'none';
+        toggleBtn.textContent = 'Show Parse Trees';
+      }
+    };
+  }
+}

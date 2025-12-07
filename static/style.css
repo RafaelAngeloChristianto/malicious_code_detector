@@ -2,7 +2,10 @@ body { font-family: Arial, sans-serif; background: #f7f7f7; color: #222; }
 .container { max-width: 900px; margin: 24px auto; background: #fff; padding: 20px; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
 .line-number { display: inline-block; width: 48px; color: #777; }
 .line-content { display: inline-block; }
-.flag { margin-left: 8px; padding: 2px 6px; border-radius: 4px; background: #c00; color: #fff; font-size: 11px; }
+.flag { margin-left: 8px; padding: 2px 6px; border-radius: 4px; color: #fff; font-size: 11px; }
+.flag.error { background: #c00; }
+.flag.warning { background: #ff9800; }
+.flag.info { background: #2196f3; }
 .pattern-info { 
   display: inline-block; 
   margin-left: 4px; 
@@ -18,7 +21,9 @@ body { font-family: Arial, sans-serif; background: #f7f7f7; color: #222; }
 .flash { outline: 2px solid #ffeb3b; box-shadow: 0 0 8px #ffd54f; }
 
 /* Highlight lines when a type filter is active */
-.type-active { background: rgba(255, 0, 0, 0.18) !important; }
+.type-active.error-line { background: rgba(255, 0, 0, 0.18) !important; }
+.type-active.warning-line { background: rgba(255, 152, 0, 0.18) !important; }
+.type-active.info-line { background: rgba(33, 150, 243, 0.15) !important; }
 /* JSON output */
 .json-area { margin-top: 12px; }
 .json-output { background: #111; color: #d6d6d6; padding: 12px; border-radius: 6px; overflow: auto; max-height: 360px; }
@@ -73,3 +78,175 @@ button:hover { background: #f0f0f0; }
 
 /* Prism code block styles (in case we use pre/code) */
 .code-block { font-family: monospace; font-size: 13px; }
+
+/* Parse Tree Visualization Styles */
+.parse-tree-section {
+  margin-top: 20px;
+  border: 2px solid #000000;
+  border-radius: 8px;
+  padding: 16px;
+  background: linear-gradient(135deg, #f5f5f5 0%, #ffffff 100%);
+}
+
+.parse-tree-container {
+  margin-top: 12px;
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.parse-trace-item {
+  margin-bottom: 20px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: #fff;
+  padding: 14px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+
+.parse-trace-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid #000000;
+}
+
+.parse-trace-title {
+  font-weight: bold;
+  color: #000000;
+  font-size: 14px;
+}
+
+.parse-trace-meta {
+  font-size: 12px;
+  color: #666;
+}
+
+.parse-trace-tokens {
+  margin: 8px 0;
+  padding: 8px;
+  background: #fff9c4;
+  border-left: 3px solid #fbc02d;
+  border-radius: 4px;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+}
+
+.parse-steps-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.parse-steps-table th {
+  background: #000000;
+  color: white;
+  padding: 8px 6px;
+  text-align: left;
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.parse-steps-table td {
+  padding: 6px;
+  border-bottom: 1px solid #e0e0e0;
+  vertical-align: top;
+}
+
+.parse-steps-table tr:hover {
+  background: #e8e8e8;
+}
+
+.parse-step-action {
+  font-weight: bold;
+  padding: 2px 6px;
+  border-radius: 3px;
+  display: inline-block;
+  font-size: 11px;
+}
+
+.parse-step-action.shift {
+  background: #e3f2fd;
+  color: #1976d2;
+}
+
+.parse-step-action.reduce {
+  background: #fce4ec;
+  color: #c2185b;
+}
+
+.parse-step-production {
+  font-family: 'Courier New', monospace;
+  background: #f5f5f5;
+  padding: 2px 4px;
+  border-radius: 3px;
+  color: #d32f2f;
+  font-weight: bold;
+}
+
+.parse-step-stack {
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  color: #555;
+  background: #fafafa;
+  padding: 2px 4px;
+  border-radius: 2px;
+}
+
+.parse-step-symbols {
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  color: #1976d2;
+  background: #e3f2fd;
+  padding: 2px 4px;
+  border-radius: 2px;
+}
+
+.parse-step-input {
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  color: #f57c00;
+  background: #fff3e0;
+  padding: 2px 4px;
+  border-radius: 2px;
+}
+
+.expand-toggle {
+  cursor: pointer;
+  color: #1976d2;
+  margin-left: 8px;
+  font-size: 12px;
+  text-decoration: underline;
+}
+
+.expand-toggle:hover {
+  color: #0d47a1;
+}
+
+.parse-tree-legend {
+  display: flex;
+  gap: 16px;
+  margin-top: 12px;
+  padding: 8px;
+  background: #f5f5f5;
+  border-radius: 4px;
+  font-size: 11px;
+  flex-wrap: wrap;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.legend-color {
+  width: 16px;
+  height: 16px;
+  border-radius: 2px;
+}
+

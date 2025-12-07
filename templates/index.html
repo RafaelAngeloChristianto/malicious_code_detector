@@ -19,6 +19,16 @@
       <div id="result">
         <h2 id="fname"></h2>
         <div id="fileArea" class="file-area"></div>
+        
+        <!-- Parse Tree Visualization Section -->
+        <div id="parseTreeSection" class="parse-tree-section" style="display:none;">
+          <div style="margin-top:12px; display:flex; justify-content:space-between; align-items:center;">
+            <h3 class="small">Grammar Parser Trace (LR Parser)</h3>
+            <button id="toggleParseTree">Toggle Parse Trees</button>
+          </div>
+          <div id="parseTreeContainer" class="parse-tree-container" style="display:block;"></div>
+        </div>
+        
         <div class="json-area">
           <div style="margin-top:12px; display:flex; justify-content:space-between; align-items:center;">
             <h3 class="small">Detector JSON Output</h3>
