@@ -13,10 +13,18 @@ Open http://127.0.0.1:5000/ in your browser.
 """
 from flask import Flask, request, render_template, jsonify
 import os
+import sys
 import ast
+
+# Add Backend directory to path
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Backend'))
 from code_detector import Detector, CodeVisitor
 
-app = Flask(__name__, static_folder='static', template_folder='templates')
+# Flask app with static and template folders in Frontend directory
+app = Flask(__name__, 
+            static_folder=os.path.dirname(__file__),
+            static_url_path='/static',
+            template_folder=os.path.dirname(__file__))
 
 @app.route('/')
 def index():
