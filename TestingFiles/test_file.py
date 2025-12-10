@@ -102,6 +102,13 @@ def test_subprocess_shell_concat():
     cmd = "cat " + filename
     subprocess.run(cmd, shell=True)  # Command injection!
 
+# Test 3.1b: Another Production #8 test - subprocess.call with shell=True and concat
+def test_subprocess_call_shell_concat():
+    """VULN -> SYSTEM_CALL SHELL_TRUE CONCAT_ARG (Production #8)"""
+    directory = input("Directory to list: ")
+    command = "ls -la " + directory  # String concatenation with user input
+    subprocess.call(command, shell=True)  # Shell injection vulnerability!
+
 # Test 3.2: OS command with formatted input
 def test_os_system_format():
     """VULN -> OS_SYSTEM FORMAT_ARG"""

@@ -1,4 +1,7 @@
-"""Simple Flask web UI for malicious_code_detector
+"""LR and AST Compiler for Detecting Malicious and Vulnerability Detector In Python Language
+Web Application Interface
+
+Simple Flask web UI for malicious_code_detector
 
 - Upload a single .py file
 - Runs the existing `Detector` on the uploaded file (in-memory, no disk storage)
@@ -18,7 +21,9 @@ import ast
 
 # Add Backend directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Backend'))
-from code_detector import Detector, CodeVisitor
+
+# Import SemanticAnalyzer from phase3_LRparser
+from phase3_LRparser import SemanticAnalyzer
 
 # Flask app with static and template folders in Frontend directory
 app = Flask(__name__, 
@@ -48,7 +53,7 @@ def upload():
     
     try:
         tree = ast.parse(src, filename=filename)
-        visitor = CodeVisitor(filename)
+        visitor = SemanticAnalyzer(filename)
         visitor.visit(tree)
         
         # Get findings and parse traces

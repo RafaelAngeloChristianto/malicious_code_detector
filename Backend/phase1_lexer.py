@@ -1,10 +1,11 @@
+#!/usr/bin/env python3
 """
-Python Lexer - Tokenizes Python source code
-============================================
-This lexer breaks down Python source code into tokens for analysis.
+PHASE 1: LEXICAL ANALYSIS (Tokenization)
+
+This module breaks down Python source code into a stream of tokens.
+Each token represents a meaningful unit like keywords, identifiers, operators, etc.
 """
 
-import re
 from enum import Enum, auto
 from dataclasses import dataclass
 from typing import List, Optional
@@ -107,7 +108,7 @@ class Token:
 
 
 class PythonLexer:
-    """Lexer for tokenizing Python source code"""
+    """PHASE 1: Lexical Analyzer - Tokenizes Python source code"""
     
     # Python keywords
     KEYWORDS = {
@@ -412,11 +413,6 @@ class PythonLexer:
             
             # String literals
             elif char in '"\'':
-                # Check for raw/formatted strings
-                prev_pos = self.pos - 1
-                prefix = ''
-                if prev_pos >= 0 and self.source[prev_pos] in 'rRfFbBuU':
-                    prefix = self.source[prev_pos]
                 self.tokens.append(self.read_string())
             
             # Numbers
@@ -467,13 +463,8 @@ z = x + y * 2
     lexer = PythonLexer(sample_code)
     tokens = lexer.tokenize()
     
-    print("Tokens:")
-    print("-" * 60)
-    for token in tokens:
-        if token.type not in {TokenType.WHITESPACE, TokenType.NEWLINE}:
-            print(token)
-    
-    print("\n" + "=" * 60)
+    print("PHASE 1: LEXICAL ANALYSIS")
+    print("=" * 60)
     print(f"Total tokens: {len(tokens)}")
     print(f"Keywords: {len([t for t in tokens if t.type == TokenType.KEYWORD])}")
     print(f"Identifiers: {len([t for t in tokens if t.type == TokenType.IDENTIFIER])}")
