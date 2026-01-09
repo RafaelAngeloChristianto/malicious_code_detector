@@ -288,7 +288,9 @@ class SemanticAnalyzer(ast.NodeVisitor):
         
         # Pre-screening: Check if file has suspicious tokens
         self.suspicious_tokens = self._prescreen_tokens()
-        self.skip_analysis = len(self.suspicious_tokens) == 0
+        # Only skip analysis if tokens were provided but none were suspicious
+        # If no tokens provided, always analyze (standalone mode without lexer)
+        self.skip_analysis = len(self.suspicious_tokens) == 0 and len(self.tokens) > 0
     
     def _prescreen_tokens(self) -> List[str]:
         """Fast pre-screening: Check tokens for suspicious keywords (Phase 1 integration)"""
@@ -528,6 +530,23 @@ class SemanticAnalyzer(ast.NodeVisitor):
                 )
                 if sql_findings:
                     self.findings.extend(sql_findings)
+            
+            # Also trigger grammar parser for SQL injection detection
+            if self.grammar_parser:
+                context = {
+                    "func_name": func_name,
+                    "has_concat": self._node_has_concatenation(node),
+                    "has_format": self._node_has_format(node),
+                    "has_fstring": self._node_has_fstring(node),
+                }
+                
+                # Only call grammar parser if there's concatenation/formatting (vulnerability pattern)
+                if context["has_concat"] or context["has_format"] or context["has_fstring"]:
+                    grammar_finding = self.grammar_parser.analyze_node_with_grammar(
+                        "Call", context, self.filename, node.lineno
+                    )
+                    if grammar_finding:
+                        self.findings.append(grammar_finding)
         
         # ====================
         # RULES 11-25: New Vulnerability Checks

@@ -284,22 +284,19 @@ class VulnerabilityParser:
         if not tokens:
             return None
         
-        # LR parsing state machine
+        # LR parsing state machine with detailed step tracking
         stack = [0]  # Initial state
+        symbols = []  # Symbol stack for tracking non-terminals and terminals
         token_idx = 0
-        parse_trace = []
+        detailed_steps = []  # Detailed parse steps for visualization
+        step_counter = 0
         
         tokens_with_end = tokens + ["$"]
         
         while token_idx < len(tokens_with_end):
             current_state = stack[-1]
             current_token = tokens_with_end[token_idx]
-            
-            parse_trace.append({
-                "state": current_state,
-                "token": current_token,
-                "stack": list(stack)
-            })
+            step_counter += 1
             
             # Look up action in ACTION table
             if current_state not in VULN_ACTION_TABLE:
@@ -307,19 +304,27 @@ class VulnerabilityParser:
             
             action_entry = VULN_ACTION_TABLE[current_state].get(current_token)
             if not action_entry:
-                # Try wildcard or default action
                 break
             
             action, value = action_entry
             
             if action == "shift":
+                # Record SHIFT step
+                detailed_steps.append({
+                    "step": step_counter,
+                    "action": "SHIFT",
+                    "state": current_state,
+                    "lookahead": current_token,
+                    "next_state": value,
+                    "stack_before": list(stack),
+                    "symbols_before": list(symbols),
+                    "input_remaining": tokens_with_end[token_idx:]
+                })
+                
                 stack.append(current_token)
                 stack.append(value)
+                symbols.append(current_token)
                 token_idx += 1
-                parse_trace.append({
-                    "action": "shift",
-                    "next_state": value
-                })
             
             elif action == "reduce":
                 production_idx = value
@@ -328,38 +333,75 @@ class VulnerabilityParser:
                 
                 lhs, rhs, severity, message = VULNERABILITY_GRAMMAR[production_idx]
                 
+                # Record state before reduction
+                stack_before = list(stack)
+                symbols_before = list(symbols)
+                
                 # Pop symbols from stack (2 * len(rhs) because of state/symbol pairs)
                 for _ in range(len(rhs) * 2):
                     if stack:
                         stack.pop()
                 
+                # Pop symbols from symbol stack
+                for _ in range(len(rhs)):
+                    if symbols:
+                        symbols.pop()
+                
                 # Push non-terminal
                 stack.append(lhs)
+                symbols.append(lhs)
                 
                 # Look up GOTO
+                goto_state = None
                 if stack:
                     prev_state = stack[-2] if len(stack) >= 2 else 0
                     if prev_state in VULN_GOTO_TABLE and lhs in VULN_GOTO_TABLE[prev_state]:
                         goto_state = VULN_GOTO_TABLE[prev_state][lhs]
                         stack.append(goto_state)
                 
-                parse_trace.append({
-                    "action": "reduce",
-                    "production": f"{lhs} -> {' '.join(rhs)}",
-                    "severity": severity,
-                    "message": message
+                # Record REDUCE step
+                step_counter += 1
+                detailed_steps.append({
+                    "step": step_counter,
+                    "action": "REDUCE",
+                    "state": current_state,
+                    "production": f"{lhs} → {' '.join(rhs)}",
+                    "goto_state": goto_state,
+                    "stack_before": stack_before,
+                    "stack_after": list(stack),
+                    "symbols_before": symbols_before,
+                    "symbols_after": list(symbols),
+                    "input_remaining": tokens_with_end[token_idx:]
                 })
                 
                 # If we reduced to VULN (start symbol), we found a vulnerability
                 if lhs == "VULN":
+                    # Extract the vulnerability type from the first RHS symbol
+                    vuln_type = rhs[0] if rhs else "VULN"
+                    
+                    # Create detailed parse trace for frontend
+                    parse_trace_data = {
+                        "vulnerability": vuln_type,
+                        "lineno": context.get("lineno", 0),
+                        "severity": severity,
+                        "message": message,
+                        "pattern": " → ".join(rhs),
+                        "tokens": tokens,
+                        "steps": detailed_steps
+                    }
+                    
+                    # Add to parse traces collection
+                    self.parse_traces.append(parse_trace_data)
+                    
                     finding = {
                         "file": context.get("file", "unknown"),
                         "lineno": context.get("lineno", 0),
-                        "code": context.get("code", "VULNERABILITY"),
+                        "code": "GRAMMAR_VULN",
                         "message": message,
                         "severity": severity,
-                        "pattern": " -> ".join(rhs),
-                        "parse_trace": parse_trace,
+                        "pattern": " → ".join(rhs),
+                        "tokens": tokens,
+                        "parse_stack": [s for s in stack if isinstance(s, int)],
                         "context": context
                     }
                     self.findings.append(finding)
