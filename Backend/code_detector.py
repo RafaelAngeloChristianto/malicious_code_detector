@@ -2,14 +2,15 @@
 """
 LR and AST Compiler for Detecting Malicious and Vulnerability Detector In Python Language
 
-code_detector.py - THREE-PHASE COMPILER for Vulnerability Detection
+code_detector.py - FOUR-PHASE COMPILER for Vulnerability Detection
 
-This is the main orchestrator that coordinates the three compilation phases:
+This is the main orchestrator that coordinates the four compilation phases:
 PHASE 1: LEXICAL ANALYSIS (phase1_lexer.py) - Tokenize Python source code
 PHASE 2: SYNTAX ANALYSIS (phase2_ASTparser.py) - Build Abstract Syntax Tree
-PHASE 3: SEMANTIC ANALYSIS (phase3_LRparser.py) - Detect vulnerability patterns
+PHASE 3: SEMANTIC ANALYSIS (phase3_semantic.py) - Detect vulnerabilities via AST traversal
+PHASE 4: GRAMMAR ANALYSIS (phase4_LRparser.py) - Formal grammar pattern matching
 
-The three phases are now separated into individual modules for clarity.
+The four phases are separated into individual modules for proper compiler architecture.
 """
 
 import os
@@ -17,20 +18,22 @@ import sys
 import json
 from typing import List, Dict, Any
 
-# Import the three compilation phases
+# Import the four compilation phases
 from phase1_lexer import PythonLexer, Token, TokenType
 from phase2_ASTparser import PythonParser
-from phase3_LRparser import SemanticAnalyzer
+from phase3_semantic import SemanticAnalyzer
+from phase4_LRparser import VulnerabilityParser
 
 # ---------- Utility types ----------
 SEVERITIES = ("INFO", "WARNING", "ERROR")
 
 class CompilerPhases:
     """
-    Manages the three phases of compilation:
+    Manages the four phases of compilation:
     1. Lexical Analysis (Tokenization)
     2. Syntax Analysis (Parsing to AST)
-    3. Semantic Analysis (Vulnerability Detection)
+    3. Semantic Analysis (Vulnerability Detection via AST)
+    4. Grammar Analysis (LR Parser Pattern Matching)
     """
     
     def __init__(self, source: str, filename: str):
@@ -38,10 +41,12 @@ class CompilerPhases:
         self.filename = filename
         self.tokens: List[Token] = []
         self.ast_tree = None
+        self.grammar_parser = None
         self.phase_stats = {
             "lexical": {},
             "syntax": {},
-            "semantic": {}
+            "semantic": {},
+            "grammar": {}
         }
     
     def phase1_lexical_analysis(self) -> List[Token]:
@@ -100,12 +105,16 @@ class CompilerPhases:
         - Uses Phase 1 tokens for fast pre-screening
         - Only analyzes files with suspicious keywords
         - Improves performance by early rejection of safe files
+        - Injects Phase 4 grammar parser for formal pattern matching
         """
         if self.ast_tree is None:
             raise ValueError("Must run phase2_syntax_analysis before semantic analysis")
         
-        # Pass tokens from Phase 1 for pre-screening
-        analyzer = SemanticAnalyzer(self.filename, tokens=self.tokens)
+        # Initialize Phase 4 grammar parser
+        self.grammar_parser = VulnerabilityParser()
+        
+        # Pass tokens from Phase 1 for pre-screening and grammar parser from Phase 4
+        analyzer = SemanticAnalyzer(self.filename, tokens=self.tokens, grammar_parser=self.grammar_parser)
         
         # Check if file warrants full analysis
         if not analyzer.should_analyze():
@@ -120,6 +129,10 @@ class CompilerPhases:
                 "functions_analyzed": 0,
                 "imports_found": 0,
                 "analysis_skipped": "No suspicious tokens detected"
+            }
+            self.phase_stats["grammar"] = {
+                "patterns_matched": 0,
+                "grammar_rules_applied": 0
             }
             return []
         
@@ -138,11 +151,17 @@ class CompilerPhases:
             "imports_found": len(analyzer.imports),
         }
         
+        # Gather grammar parser statistics (Phase 4)
+        self.phase_stats["grammar"] = {
+            "patterns_matched": len(self.grammar_parser.findings),
+            "grammar_rules_applied": len(self.grammar_parser.parse_traces),
+        }
+        
         return analyzer.findings
     
     def get_phase_report(self) -> Dict[str, Any]:
         """
-        Get a comprehensive report of all three compilation phases.
+        Get a comprehensive report of all four compilation phases.
         """
         return {
             "filename": self.filename,
@@ -150,6 +169,7 @@ class CompilerPhases:
                 "phase1_lexical_analysis": self.phase_stats["lexical"],
                 "phase2_syntax_analysis": self.phase_stats["syntax"],
                 "phase3_semantic_analysis": self.phase_stats["semantic"],
+                "phase4_grammar_analysis": self.phase_stats["grammar"],
             }
         }
 
@@ -257,7 +277,7 @@ class Detector:
         infos = sum(1 for r in sorted_reports if r.get("severity") == "INFO")
         
         print("\n" + "="*70)
-        print("THREE-PHASE COMPILATION RESULTS")
+        print("FOUR-PHASE COMPILATION RESULTS")
         print("="*70)
         print(f"[!] Findings: {errors} ERROR(s), {warns} WARNING(s), {infos} INFO(s)")
         print("="*70)
@@ -268,6 +288,8 @@ class Detector:
             sev = r.get("severity", "INFO")
             code = r.get("code", "ISSUE")
             msg = r.get("message", "")
+            # Remove unicode characters that might cause encoding issues
+            msg = msg.encode('ascii', 'ignore').decode('ascii')
             print(f"{sev:7} {f}:{ln:4} {code:20} - {msg}")
 
         try:

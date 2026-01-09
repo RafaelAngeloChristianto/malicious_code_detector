@@ -22,8 +22,9 @@ import ast
 # Add Backend directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Backend'))
 
-# Import SemanticAnalyzer from phase3_LRparser
-from phase3_LRparser import SemanticAnalyzer
+# Import from Phase 3 (Semantic Analysis) and Phase 4 (Grammar Parser)
+from phase3_semantic import SemanticAnalyzer
+from phase4_LRparser import VulnerabilityParser
 
 # Flask app with static and template folders in Frontend directory
 app = Flask(__name__, 
@@ -53,7 +54,9 @@ def upload():
     
     try:
         tree = ast.parse(src, filename=filename)
-        visitor = SemanticAnalyzer(filename)
+        # Initialize Phase 4 grammar parser and inject into Phase 3 analyzer
+        grammar_parser = VulnerabilityParser()
+        visitor = SemanticAnalyzer(filename, tokens=[], grammar_parser=grammar_parser)
         visitor.visit(tree)
         
         # Get findings and parse traces

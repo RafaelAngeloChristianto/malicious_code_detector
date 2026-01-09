@@ -36,7 +36,7 @@ from pathlib import Path
 def test_sql_concat():
     """VULN -> SQL_CALL CONCAT_ARG"""
     username = input("Username: ")
-    query = "SELECT * FROM users WHERE name = '" + username + "'"
+    query = "SELEC * FROM users WHERE name = '" + username + "'"
     # Simulated cursor
     class FakeCursor:
         def execute(self, q):
@@ -48,7 +48,7 @@ def test_sql_concat():
 def test_sql_format():
     """VULN -> SQL_CALL FORMAT_ARG"""
     user_id = input("User ID: ")
-    query = "SELECT * FROM users WHERE id = {}".format(user_id)
+    query = "SELECT SELECT SELECT SELECT * FROM users WHERE id = {}".format(user_id)
     class FakeCursor:
         def execute(self, q):
             print(f"Executing: {q}")
@@ -466,8 +466,221 @@ if __name__ == "__main__":
     print("  8. Weak Cryptography:       10+ patterns")
     print("  9. Insecure Network:        5+ patterns")
     print(" 10. High Complexity:         2 functions")
+    print(" 11. XSS Vulnerabilities:     2+ patterns")
+    print(" 12. LDAP Injection:          1+ pattern")
+    print(" 13. XXE Vulnerabilities:     2+ patterns")
+    print(" 14. Template Injection:      2+ patterns")
+    print(" 15. NoSQL Injection:         1+ pattern")
+    print(" 16. YAML Injection:          1+ pattern")
+    print(" 17. JSON DOS:                1+ pattern")
+    print(" 18. Weak Session IDs:        2+ patterns")
+    print(" 19. Insecure Cookies:        2+ patterns")
+    print(" 20. JWT Secrets:             1+ pattern")
+    print(" 21. Missing Auth:            2+ patterns")
+    print(" 22. Missing CSRF:            2+ patterns")
     print("\n" + "=" * 70)
-    print("TOTAL EXPECTED: 40+ vulnerabilities detected!")
+    print("TOTAL EXPECTED: 60+ vulnerabilities detected!")
     print("=" * 70)
     print("\nNote: This file intentionally contains vulnerable code for testing.")
     print("DO NOT use these patterns in production code!")
+
+
+# ============================================
+# NEW TESTS FOR RULES 11-25
+# ============================================
+
+# Test 11: XSS Vulnerability - Unescaped user input in templates
+def test_xss_vulnerability():
+    """Test XSS detection in render_template calls"""
+    from flask import Flask, render_template_string, request
+    app = Flask(__name__)
+    
+    @app.route('/greet')
+    def greet():
+        name = request.args.get('name')
+        # XSS: Unescaped user input directly in template
+        return render_template_string("<h1>Hello " + name + "</h1>")
+    
+    @app.route('/message')
+    def message():
+        msg = request.form.get('message')
+        # XSS: f-string with user input
+        return render_template_string(f"<p>{msg}</p>")
+
+
+# Test 12: LDAP Injection - Unvalidated user input in LDAP queries
+def test_ldap_injection():
+    """Test LDAP injection detection"""
+    import ldap
+    
+    def search_user(username):
+        conn = ldap.initialize('ldap://localhost')
+        # LDAP Injection: User input directly in filter
+        search_filter = f"(uid={username})"
+        conn.search_s('dc=example,dc=com', ldap.SCOPE_SUBTREE, search_filter)
+
+
+# Test 13: XXE Vulnerability - XML External Entity attacks
+def test_xxe_vulnerability():
+    """Test XXE detection in XML parsing"""
+    import xml.etree.ElementTree as ET
+    from xml.dom import minidom
+    
+    def parse_xml_unsafe(xml_data):
+        # XXE: Using ElementTree without disabling external entities
+        tree = ET.fromstring(xml_data)
+        return tree
+    
+    def parse_xml_minidom(xml_string):
+        # XXE: Using minidom which allows external entities
+        dom = minidom.parseString(xml_string)
+        return dom
+
+
+# Test 14: Template Injection - Dynamic template creation
+def test_template_injection():
+    """Test template injection detection"""
+    from jinja2 import Template
+    from flask import request
+    
+    def render_custom_template():
+        # Template Injection: User input as template source
+        template_str = request.args.get('template')
+        template = Template(template_str)
+        return template.render()
+    
+    def render_format_template():
+        user_input = request.form.get('content')
+        # Template Injection via format string
+        template = Template("Hello " + user_input)
+        return template.render()
+
+
+# Test 15: NoSQL Injection - MongoDB query injection
+def test_nosql_injection():
+    """Test NoSQL injection detection"""
+    from flask import request
+    import pymongo
+    
+    def find_user():
+        username = request.args.get('username')
+        # NoSQL Injection: Direct user input in query
+        query = {"username": username, "password": request.args.get('password')}
+        return db.users.find(query)
+
+
+# Test 16: YAML Injection - Unsafe YAML loading
+def test_yaml_unsafe_load():
+    """Test YAML injection detection"""
+    import yaml
+    
+    def load_config(yaml_string):
+        # YAML Injection: yaml.load() without Loader (allows code execution)
+        config = yaml.load(yaml_string)
+        return config
+    
+    def load_user_data(data):
+        # YAML Injection: yaml.unsafe_load() allows arbitrary code
+        return yaml.unsafe_load(data)
+
+
+# Test 17: JSON DOS - Deeply nested JSON causing denial of service
+def test_json_dos():
+    """Test JSON DOS detection"""
+    import json
+    
+    def parse_json_unsafe(json_data):
+        # JSON DOS: No depth limit, allows deeply nested structures
+        data = json.loads(json_data)
+        return data
+
+
+# Test 18: Weak Session ID - Predictable session identifiers
+def test_weak_session_id():
+    """Test weak session ID detection"""
+    import random
+    import time
+    
+    def generate_session_id():
+        # Weak: Using random.random() for session IDs (predictable)
+        session_id = str(random.random())
+        return session_id
+    
+    def create_session_token():
+        # Weak: Using timestamp + random.randint (predictable pattern)
+        token = str(time.time()) + str(random.randint(1000, 9999))
+        return token
+
+
+# Test 19: Insecure Cookie Flags - Missing security flags on cookies
+def test_insecure_cookie_flags():
+    """Test cookie security flag detection"""
+    from flask import Flask, make_response
+    app = Flask(__name__)
+    
+    @app.route('/set_cookie')
+    def set_cookie():
+        response = make_response("Cookie set")
+        # Insecure: No secure=True, httponly=True, or samesite flags
+        response.set_cookie('session_id', 'abc123')
+        return response
+    
+    @app.route('/set_auth_cookie')
+    def set_auth_cookie():
+        response = make_response("Auth cookie set")
+        # Insecure: Missing httponly flag on auth cookie
+        response.set_cookie('auth_token', 'xyz789', secure=True)
+        return response
+
+
+# Test 20: Hardcoded JWT Secret - JWT signed with hardcoded secret
+def test_hardcoded_jwt_secret():
+    """Test JWT hardcoded secret detection"""
+    import jwt
+    
+    def create_jwt_token(user_id):
+        # Hardcoded JWT Secret: Secret key in source code
+        secret = "my_super_secret_key_12345"
+        token = jwt.encode({'user_id': user_id}, secret, algorithm='HS256')
+        return token
+
+
+# Test 21: Missing Authentication - Routes without @login_required
+def test_missing_login_required():
+    """Test missing authentication detection"""
+    from flask import Flask, request
+    app = Flask(__name__)
+    
+    @app.route('/admin/delete_user')
+    def delete_user():
+        # Missing @login_required: Sensitive operation without auth
+        user_id = request.args.get('user_id')
+        # Delete user logic
+        return f"User {user_id} deleted"
+    
+    @app.route('/api/sensitive_data')
+    def get_sensitive_data():
+        # Missing auth: No @login_required or @auth decorator
+        return {"secret": "sensitive_information"}
+
+
+# Test 22: CSRF Exempt Routes - POST/PUT/DELETE without CSRF protection
+def test_csrf_exempt_route():
+    """Test CSRF protection detection"""
+    from flask import Flask, request
+    app = Flask(__name__)
+    
+    @app.route('/transfer_funds', methods=['POST'])
+    def transfer_funds():
+        # Missing CSRF protection: State-changing POST without CSRF token
+        amount = request.form.get('amount')
+        recipient = request.form.get('recipient')
+        # Transfer logic
+        return f"Transferred {amount} to {recipient}"
+    
+    @app.route('/api/delete_account', methods=['DELETE'])
+    def delete_account():
+        # Missing CSRF: DELETE endpoint without protection
+        user_id = request.args.get('user_id')
+        # Delete logic
+        return f"Account {user_id} deleted"
